@@ -509,7 +509,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.9</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.11</span>
     </div>
   </div>
 </div>
@@ -994,8 +994,9 @@ function render(main, multi, metno, label, staleTs) {
 
   $('placeName').textContent = label;
   $('updated').textContent = 'Aktualizováno ' + new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'});
-  $('nowEmoji').textContent = emoji;
-  $('nowEmoji').className = 'emoji ' + (mood === 'clear' ? 'nowEmoji-spin' : 'nowEmoji-float');
+  const heroEmoji = (night && cur.weather_code === 0) ? '🌙' : emoji;   // jasná noc = měsíc, ne rotující slunce
+  $('nowEmoji').textContent = heroEmoji;
+  $('nowEmoji').className = 'emoji ' + (cur.weather_code === 0 && !night ? 'nowEmoji-spin' : 'nowEmoji-float');
   $('nowDesc').textContent = desc;
   $('nowFeels').textContent = `Pocitově ${Math.round(cur.apparent_temperature)} °C`;
   $('stWind').textContent = fmt1(cur.wind_speed_10m) + ' km/h';
@@ -1584,7 +1585,7 @@ async function initRadar(lat, lon) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.9';
+const APP_VERSION = '1.11';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
