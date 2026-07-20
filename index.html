@@ -64,6 +64,10 @@
     animation: pulse 2.2s ease-in-out infinite;
   }
   .imminent.show { display:block; }
+  .imminent.info {
+    background:rgba(159,211,232,.16); border-color:rgba(159,211,232,.55);
+    animation:none;                                  /* přeháňka informuje, nekřičí */
+  }
   .toast {
     position:fixed; left:16px; right:16px; bottom:24px; z-index:50;
     background:#22314a; border:1px solid var(--card-line); border-radius:14px;
@@ -509,7 +513,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.12</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.15</span>
     </div>
   </div>
 </div>
@@ -922,7 +926,7 @@ async function load(lat, lon, label, silent) {
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
         `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day` +
         `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_gusts_10m,snowfall` +
-        `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_gusts_10m_max,snowfall_sum,uv_index_max&forecast_days=7`).then(r=>r.json()),
+        `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_gusts_10m_max,snowfall_sum,uv_index_max&minutely_15=precipitation&forecast_days=7`).then(r=>r.json()),
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
         `&hourly=temperature_2m,weather_code,wind_gusts_10m&models=${modelIds}&forecast_days=3`).then(r=>r.json()),
       fetch(`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`).then(r=>r.json())
@@ -1325,11 +1329,28 @@ function renderDaily(main, consensus) {
 }
 
 
+/* načíst počasí pro aktuální GPS polohu; při selhání spadnout na poslední známé souřadnice */
+function loadHere(silent, fallback) {
+  if (!navigator.geolocation) { if (fallback) load(fallback.lat, fallback.lon, fallback.label, silent); return; }
+  navigator.geolocation.getCurrentPosition(
+    p => load(p.coords.latitude, p.coords.longitude, 'Moje poloha', silent),
+    () => { if (fallback) load(fallback.lat, fallback.lon, fallback.label, silent); },
+    { timeout: 8000, maximumAge: 5*60*1000 }
+  );
+}
+
 /* automatická obnova: návrat do aplikace (data starší 15 min) nebo obnovení připojení */
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && place && Date.now() - lastFetch > 15*60*1000) load(place.lat, place.lon, place.label);
+  if (!document.hidden && place && Date.now() - lastFetch > 15*60*1000) {
+    if (place.label === 'Moje poloha') loadHere(false, place);
+    else load(place.lat, place.lon, place.label);
+  }
 });
-addEventListener('online', () => { if (place) load(place.lat, place.lon, place.label); });
+addEventListener('online', () => {
+  if (!place) return;
+  if (place.label === 'Moje poloha') loadHere(true, place);
+  else load(place.lat, place.lon, place.label);
+});
 
 /* ---------- upozornění na nebezpečné počasí ---------- */
 let bellOn = true;
@@ -1362,12 +1383,12 @@ $('bellBtn').onclick = async () => {
     : '🔔 Zapnuto. Systémová oznámení tu prohlížeč nepovoluje — při bouřce appka zavibruje a ukáže červený pruh nahoře.');
 };
 
-async function notifyEvent(key, title, body) {
+async function notifyEvent(key, title, body, gentle) {
   if (!bellOn) return;
   const done = (await stGet('wx-notified')) || [];
   if (done.includes(key)) return;              // stejnou událost neopakovat
   done.push(key); stSet('wx-notified', done.slice(-30));
-  navigator.vibrate?.([250, 120, 250]);
+  navigator.vibrate?.(gentle ? [120] : [250, 120, 250]);
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
 
   /* preferovat service worker — jen tak se na Androidu ukáže oznámení ve stavové liště */
@@ -1377,7 +1398,7 @@ async function notifyEvent(key, title, body) {
       if (reg && reg.showNotification) {
         reg.showNotification(title, {
           body, tag: key, icon: 'icon-192.png', badge: 'icon-192.png',
-          vibrate: [250, 120, 250], requireInteraction: false
+          vibrate: gentle ? [120] : [250, 120, 250], requireInteraction: false
         });
         return;
       }
@@ -1400,7 +1421,36 @@ function checkImminent(main, nowIdx, label) {
     if ((c === 65 || c === 82) && !found) found = { ico:'🌧️', what:'Silný déšť', mins, mm, key:`rain|${label}|${h.time[i]}` };
     if ((c === 75 || c === 86) && !found) found = { ico:'❄️', what:'Silné sněžení', mins, mm, key:`snow|${label}|${h.time[i]}` };
   }
-  if (!found) { bar.classList.remove('show'); return; }
+  if (!found) {
+    /* nic vážného — mrknout na 15min radarová data, jestli neprší / nepřijde přeháňka */
+    const m15 = main.minutely_15;
+    bar.classList.remove('show', 'info');
+    if (m15 && m15.time && m15.precipitation) {
+      const nowI = findNowIndex(m15.time);
+      const cur15 = m15.precipitation[nowI] ?? 0;
+      if (cur15 >= 0.05) {
+        bar.innerHTML = `🌧️ <b>Právě prší</b> — ${fmt1(cur15)} mm za 15 min (radarová data).`;
+        bar.classList.add('show', 'info');
+        return;
+      }
+      for (let i = nowI + 1; i <= Math.min(nowI + 8, m15.time.length - 1); i++) {
+        if ((m15.precipitation[i] ?? 0) >= 0.1) {
+          const mins = Math.max(5, Math.round((new Date(m15.time[i]) - Date.now()) / 60000));
+          if (mins <= 120) {
+            const when = mins < 90 ? `cca za ${mins} min` : `cca za ${Math.round(mins/60)} h`;
+            bar.innerHTML = `🌧️ <b>Přeháňka se blíží</b> — ${when}. Deštník po ruce.`;
+            bar.classList.add('show', 'info');
+            /* jedno jemné oznámení na hodinu příchodu, ať to necinká každých 15 min */
+            const hourKey = m15.time[i].slice(0, 13);
+            notifyEvent(`shower|${label}|${hourKey}`, `🌧️ Přeháňka — ${label}`, `Dorazí ${when}.`, true);
+          }
+          break;
+        }
+      }
+    }
+    return;
+  }
+  bar.classList.remove('info');
   const when = found.mins <= 10 ? 'prakticky teď' : `cca za ${found.mins < 90 ? found.mins + ' min' : Math.round(found.mins/60) + ' h'}`;
   const mmTxt = found.mm != null && found.mm >= 0.5 ? ` Čeká se kolem ${fmt1(found.mm)} mm/h.` : '';
   bar.innerHTML = `${found.ico} <b>${found.what} se blíží</b> — ${when}.${mmTxt} Zkontrolujte, co máte venku, a raději neplánujte cesty.`;
@@ -1585,7 +1635,7 @@ async function initRadar(lat, lon) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.12';
+const APP_VERSION = '1.15';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
@@ -1704,7 +1754,8 @@ initUpdates();
 /* pravidelná kontrola každých 10 min, dokud je appka otevřená (i na pozadí) */
 setInterval(() => {
   if (place && Date.now() - lastFetch > 10*60*1000 && navigator.onLine !== false) {
-    load(place.lat, place.lon, place.label, true);
+    if (place.label === 'Moje poloha') loadHere(true, place);
+    else load(place.lat, place.lon, place.label, true);
   }
 }, 5*60*1000);
 
@@ -1716,7 +1767,10 @@ setInterval(() => {
   favs = (await stGet('wx-favs')) || [];
   renderFavs();
   const last = await stGet('wx-last');
-  if (last && last.lat != null) load(last.lat, last.lon, last.label);
+  if (last && last.label === 'Moje poloha') {
+    showLoading();
+    loadHere(false, last);                 // čerstvá GPS poloha, záloha = poslední známá
+  } else if (last && last.lat != null) load(last.lat, last.lon, last.label);
   else load(50.0755, 14.4378, 'Praha, CZ');
 })();
 </script>
