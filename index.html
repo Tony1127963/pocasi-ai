@@ -385,6 +385,8 @@
     * { animation:none !important; transition:none !important; }
   }
   .hidden { display:none; }
+
+
   /* ---------- Liquid Glass (verze 1.3) ---------- */
   .card, .search-box input, .geo-btn, .star-btn, .fav-chip, .hour,
   .alert, .offline, .imminent, .upd-bar, .toast, .suggestions,
@@ -441,6 +443,31 @@
     background: rgba(104,131,173,.3);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
   }
+
+  /* horní ikony: čisté linky bez rámečků */
+  .geo-btn, .star-btn {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    width: 42px; padding: 0; color: var(--ink);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .geo-btn svg, .star-btn svg { width: 23px; height: 23px; }
+  .star-btn.on { color: var(--amber); }
+
+  /* hledání: bez rámečku, jen lupa a linka */
+  .search-box { display:flex; align-items:center; gap:9px; color:var(--ink); }
+  .search-box .s-ico { flex-shrink:0; width:20px; height:20px; color:var(--ink-dim); }
+  .search-box input {
+    flex:1; min-width:0;
+    background:transparent !important; border:none !important; box-shadow:none !important;
+    -webkit-backdrop-filter:none !important; backdrop-filter:none !important;
+    border-bottom:1.5px solid rgba(255,255,255,.28) !important; border-radius:0 !important;
+    padding:11px 2px !important;
+  }
+  .search-box input:focus { border-bottom-color:var(--amber) !important; }
 </style>
 </head>
 <body>
@@ -453,12 +480,13 @@
 
   <div class="search-row">
     <div class="search-box">
+      <svg class="s-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><line x1="15.8" y1="15.8" x2="21" y2="21"/></svg>
       <input id="q" type="text" placeholder="Hledat město… (např. Brno)" autocomplete="off" aria-label="Hledat město">
       <div class="suggestions" id="sug"></div>
     </div>
-    <button class="geo-btn" id="geoBtn" title="Moje poloha" aria-label="Použít moji polohu">📍</button>
-    <button class="star-btn" id="starBtn" title="Přidat do oblíbených" aria-label="Přidat do oblíbených">☆</button>
-    <button class="star-btn" id="bellBtn" title="Upozornění na bouřky" aria-label="Zapnout upozornění na nebezpečné počasí">🔕</button>
+    <button class="geo-btn" id="geoBtn" title="Moje poloha" aria-label="Použít moji polohu"></button>
+    <button class="star-btn" id="starBtn" title="Přidat do oblíbených" aria-label="Přidat do oblíbených"></button>
+    <button class="star-btn" id="bellBtn" title="Upozornění na bouřky" aria-label="Zapnout upozornění na nebezpečné počasí"></button>
   </div>
 
   <div class="favs" id="favsBar"></div>
@@ -513,7 +541,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.15</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.17</span>
     </div>
   </div>
 </div>
@@ -542,6 +570,12 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const ICO = {
+  locate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><line x1="12" y1="1.8" x2="12" y2="4.6"/><line x1="12" y1="19.4" x2="12" y2="22.2"/><line x1="1.8" y1="12" x2="4.6" y2="12"/><line x1="19.4" y1="12" x2="22.2" y2="12"/></svg>',
+  star: on => `<svg viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2.8l2.85 5.8 6.4.93-4.63 4.5 1.1 6.37L12 17.4l-5.72 3-1.1-6.37-4.63-4.5 6.4-.93z"/></svg>`,
+  bell: on => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2a5.8 5.8 0 0 0-5.8 5.8v3.4L4.4 15.6h15.2l-1.8-3.2V9A5.8 5.8 0 0 0 12 3.2z"/><path d="M9.9 18.8a2.2 2.2 0 0 0 4.2 0"/>${on ? '' : '<line x1="4" y1="4" x2="20" y2="20"/>'}</svg>`
+};
+
 
 const WMO = {
   0:['Jasno','☀️','clear'],1:['Skoro jasno','🌤️','clear'],2:['Polojasno','⛅','clear'],
@@ -831,7 +865,7 @@ function renderFavs() {
 function updateStar() {
   const b = $('starBtn');
   const on = place && isFav(place);
-  b.textContent = on ? '★' : '☆';
+  b.innerHTML = ICO.star(on);
   b.classList.toggle('on', !!on);
   b.title = on ? 'Odebrat z oblíbených' : 'Přidat do oblíbených';
 }
@@ -1364,7 +1398,7 @@ function toast(msg) {
 }
 function bellState() {
   const b = $('bellBtn');
-  b.textContent = bellOn ? '🔔' : '🔕';
+  b.innerHTML = ICO.bell(bellOn);
   b.classList.toggle('on', bellOn);
   b.title = bellOn ? 'Upozornění na bouřky jsou zapnutá' : 'Zapnout upozornění na bouřky';
 }
@@ -1635,7 +1669,7 @@ async function initRadar(lat, lon) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.15';
+const APP_VERSION = '1.17';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
@@ -1761,6 +1795,7 @@ setInterval(() => {
 
 /* start: obnovit oblíbená + poslední město, jinak Praha */
 (async () => {
+  $('geoBtn').innerHTML = ICO.locate;
   const savedBell = await stGet('wx-bell');
   if (savedBell === false) bellOn = false;
   bellState();
