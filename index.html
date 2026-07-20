@@ -461,13 +461,15 @@
   .search-box { display:flex; align-items:center; gap:9px; color:var(--ink); }
   .search-box .s-ico { flex-shrink:0; width:20px; height:20px; color:var(--ink-dim); }
   .search-box input {
-    flex:1; min-width:0;
+    flex:0 1 auto; width:6.9em; min-width:0;
+    transition:width .3s ease;
     background:transparent !important; border:none !important; box-shadow:none !important;
     -webkit-backdrop-filter:none !important; backdrop-filter:none !important;
     border-bottom:1.5px solid rgba(255,255,255,.28) !important; border-radius:0 !important;
     padding:11px 2px !important;
   }
-  .search-box input:focus { border-bottom-color:var(--amber) !important; }
+  .search-box input:focus { border-bottom-color:var(--amber) !important; width:100%; }
+  .search-box input:focus-visible { outline:none !important; }
 </style>
 </head>
 <body>
@@ -481,7 +483,7 @@
   <div class="search-row">
     <div class="search-box">
       <svg class="s-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><line x1="15.8" y1="15.8" x2="21" y2="21"/></svg>
-      <input id="q" type="text" placeholder="Hledat město… (např. Brno)" autocomplete="off" aria-label="Hledat město">
+      <input id="q" type="text" placeholder="Hledat město" autocomplete="off" aria-label="Hledat město">
       <div class="suggestions" id="sug"></div>
     </div>
     <button class="geo-btn" id="geoBtn" title="Moje poloha" aria-label="Použít moji polohu"></button>
@@ -541,7 +543,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.17</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.21</span>
     </div>
   </div>
 </div>
@@ -933,11 +935,7 @@ async function searchCity(name) {
 $('geoBtn').onclick = () => {
   if (!navigator.geolocation) return showError('Prohlížeč nepodporuje zjištění polohy.');
   showLoading();
-  navigator.geolocation.getCurrentPosition(
-    p => load(p.coords.latitude, p.coords.longitude, 'Moje poloha'),
-    () => showError('Přístup k poloze je zablokovaný (v náhledu aplikace to bývá omezené systémem). Napište město do vyhledávání a potvrďte Enterem.'),
-    { timeout: 10000 }
-  );
+  loadHere(false, place);
 };
 
 function showLoading(){ $('loading').classList.remove('hidden'); $('app').classList.add('hidden'); $('error').classList.add('hidden'); }
@@ -946,11 +944,11 @@ function showError(msg){ $('loading').classList.add('hidden'); $('app').classLis
 /* ---------- data ---------- */
 let lastFetch = 0;
 
-async function load(lat, lon, label, silent) {
+async function load(lat, lon, label, silent, gps) {
   const hasData = !$('app').classList.contains('hidden');
   if (!silent && hasData) $('app').classList.add('switching');   // plynulý přechod, appka zůstává vidět
   else if (!silent) showLoading();
-  place = { lat, lon, label };
+  place = { lat, lon, label, gps: !!gps };
   stSet('wx-last', place);
   try {
     const base = `latitude=${lat}&longitude=${lon}&timezone=auto`;
@@ -1363,12 +1361,25 @@ function renderDaily(main, consensus) {
 }
 
 
+/* jméno obce ze souřadnic (reverzní geokódování, 3s limit, jinak obecný popisek) */
+async function gpsName(lat, lon) {
+  try {
+    const r = await Promise.race([
+      fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=cs`).then(x => x.json()),
+      new Promise((_, rej) => setTimeout(rej, 3000))
+    ]);
+    return r.locality || r.city || 'Moje poloha';
+  } catch(_) { return 'Moje poloha'; }
+}
 /* načíst počasí pro aktuální GPS polohu; při selhání spadnout na poslední známé souřadnice */
 function loadHere(silent, fallback) {
-  if (!navigator.geolocation) { if (fallback) load(fallback.lat, fallback.lon, fallback.label, silent); return; }
+  if (!navigator.geolocation) { if (fallback) load(fallback.lat, fallback.lon, fallback.label, silent, true); return; }
   navigator.geolocation.getCurrentPosition(
-    p => load(p.coords.latitude, p.coords.longitude, 'Moje poloha', silent),
-    () => { if (fallback) load(fallback.lat, fallback.lon, fallback.label, silent); },
+    async p => load(p.coords.latitude, p.coords.longitude, await gpsName(p.coords.latitude, p.coords.longitude), silent, true),
+    () => {
+      if (fallback) load(fallback.lat, fallback.lon, fallback.label, silent, true);
+      else showError('Přístup k poloze je zablokovaný. Napište město do vyhledávání a potvrďte Enterem.');
+    },
     { timeout: 8000, maximumAge: 5*60*1000 }
   );
 }
@@ -1376,13 +1387,13 @@ function loadHere(silent, fallback) {
 /* automatická obnova: návrat do aplikace (data starší 15 min) nebo obnovení připojení */
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && place && Date.now() - lastFetch > 15*60*1000) {
-    if (place.label === 'Moje poloha') loadHere(false, place);
+    if (place.gps) loadHere(false, place);
     else load(place.lat, place.lon, place.label);
   }
 });
 addEventListener('online', () => {
   if (!place) return;
-  if (place.label === 'Moje poloha') loadHere(true, place);
+  if (place.gps) loadHere(true, place);
   else load(place.lat, place.lon, place.label);
 });
 
@@ -1669,7 +1680,7 @@ async function initRadar(lat, lon) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.17';
+const APP_VERSION = '1.21';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
@@ -1788,7 +1799,7 @@ initUpdates();
 /* pravidelná kontrola každých 10 min, dokud je appka otevřená (i na pozadí) */
 setInterval(() => {
   if (place && Date.now() - lastFetch > 10*60*1000 && navigator.onLine !== false) {
-    if (place.label === 'Moje poloha') loadHere(true, place);
+    if (place.gps) loadHere(true, place);
     else load(place.lat, place.lon, place.label, true);
   }
 }, 5*60*1000);
@@ -1802,7 +1813,7 @@ setInterval(() => {
   favs = (await stGet('wx-favs')) || [];
   renderFavs();
   const last = await stGet('wx-last');
-  if (last && last.label === 'Moje poloha') {
+  if (last && (last.gps || last.label === 'Moje poloha')) {
     showLoading();
     loadHere(false, last);                 // čerstvá GPS poloha, záloha = poslední známá
   } else if (last && last.lat != null) load(last.lat, last.lon, last.label);
