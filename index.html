@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.25</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.27</span>
     </div>
   </div>
 </div>
@@ -658,6 +658,7 @@ function fxResize() {
   });
   fx.ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   fxOldCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  fxOldCanvas.style.opacity = '0';                 // starý snímek po změně rozměrů nedává smysl
 }
 addEventListener('resize', fxResize); fxResize();
 
@@ -678,7 +679,7 @@ const mkStars = n => {
 function setFx(mode) {
   if (fx.mode === mode) return;
   /* zamrazit poslední snímek staré scény a nechat ho plynule zmizet přes novou */
-  if (fx.mode !== 'none' && !fx.static) {
+  if (fx.mode !== 'none' && !fx.static && !document.hidden) {
     fxOldCtx.clearRect(0, 0, fx.W, fx.H);
     fxOldCtx.drawImage(fx.c, 0, 0, fx.W, fx.H);
     fxOldCanvas.style.transition = 'none';
@@ -687,6 +688,11 @@ function setFx(mode) {
       fxOldCanvas.style.transition = 'opacity .9s ease';
       fxOldCanvas.style.opacity = '0';
     });
+    /* pojistka: kdyby snímkovací smyčka nedoběhla, starý obraz po vteřině zmizí natvrdo */
+    setTimeout(() => { fxOldCanvas.style.opacity = '0'; }, 1100);
+  } else {
+    fxOldCanvas.style.opacity = '0';
+    fxOldCtx.clearRect(0, 0, fx.W, fx.H);
   }
   fx.mode = mode; fx.parts = []; fx.aux = null; fx.shoot = null; fx.boltDraw = false; fx.flash = 0;
   cancelAnimationFrame(fx.raf);
@@ -862,7 +868,10 @@ function fxLoop() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) cancelAnimationFrame(fx.raf);
-  else if (fx.mode !== 'none' && !fx.static) fxLoop();
+  else {
+    fxOldCanvas.style.opacity = '0';               // úklid případného zamrzlého snímku
+    if (fx.mode !== 'none' && !fx.static) fxLoop();
+  }
 });
 let fxScrollT = null;
 addEventListener('scroll', () => {
@@ -1716,7 +1725,7 @@ async function initRadar(lat, lon) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.25';
+const APP_VERSION = '1.27';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
