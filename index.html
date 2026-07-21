@@ -388,7 +388,7 @@
 
 
   /* ---------- Liquid Glass (verze 1.3) ---------- */
-  .card, .search-box input, .geo-btn, .star-btn, .fav-chip, .hour,
+  .card, .search-box input, .geo-btn, .star-btn, .fav-chip,
   .alert, .offline, .imminent, .upd-bar, .toast, .suggestions,
   .radar-play, .rf-btn, #rfBottom {
     background: linear-gradient(180deg, rgba(104,131,173,.42), rgba(80,105,144,.42));
@@ -470,6 +470,16 @@
   }
   .search-box input:focus { border-bottom-color:var(--amber) !important; width:100%; }
   .search-box input:focus-visible { outline:none !important; }
+
+  /* výkon: hodiny bez blur (24 kusů bylo hlavní brzdou rolování) */
+  .hour {
+    background: rgba(104,131,173,.3);
+    border: 1px solid rgba(255,255,255,.14);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  .hour.now { background: rgba(245,182,79,.22); border-color: rgba(245,182,79,.55); }
+  /* GPU vrstva pro plátna tapety */
+  #fx, #fxOld { will-change: transform; transform: translateZ(0); }
 </style>
 </head>
 <body>
@@ -543,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.21</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.23</span>
     </div>
   </div>
 </div>
@@ -572,6 +582,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const tick = () => navigator.vibrate?.(8);   // jemné hmatové ťuknutí
 const ICO = {
   locate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><line x1="12" y1="1.8" x2="12" y2="4.6"/><line x1="12" y1="19.4" x2="12" y2="22.2"/><line x1="1.8" y1="12" x2="4.6" y2="12"/><line x1="19.4" y1="12" x2="22.2" y2="12"/></svg>',
   star: on => `<svg viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2.8l2.85 5.8 6.4.93-4.63 4.5 1.1 6.37L12 17.4l-5.72 3-1.1-6.37-4.63-4.5 6.4-.93z"/></svg>`,
@@ -791,6 +802,7 @@ function drawSunGlow(ctx, p, W, H, strength) {
 }
 
 function fxLoop() {
+  if (fx.scrolling) { fx.raf = requestAnimationFrame(fxLoop); return; }   // při rolování jde 100 % výkonu scrollu
   const { ctx, W, H, parts, mode } = fx;
   ctx.clearRect(0, 0, W, H);
   /* jemný paralax posun celé scény podle náklonu telefonu */
@@ -846,6 +858,12 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) cancelAnimationFrame(fx.raf);
   else if (fx.mode !== 'none' && !fx.static) fxLoop();
 });
+let fxScrollT = null;
+addEventListener('scroll', () => {
+  fx.scrolling = true;
+  clearTimeout(fxScrollT);
+  fxScrollT = setTimeout(() => fx.scrolling = false, 140);
+}, { passive: true });
 
 /* ---------- oblíbená města ---------- */
 function isFav(p) { return favs.some(f => f.label === p.label); }
@@ -873,6 +891,7 @@ function updateStar() {
 }
 $('starBtn').onclick = () => {
   if (!place) return;
+  tick();
   if (isFav(place)) favs = favs.filter(x => x.label !== place.label);
   else favs.push({ ...place });
   stSet('wx-favs', favs); renderFavs(); updateStar();
@@ -1354,7 +1373,7 @@ function renderDaily(main, consensus) {
       wrap.classList.toggle('open', willOpen);
       row.setAttribute('aria-expanded', willOpen);
     };
-    row.onclick = toggle;
+    row.onclick = () => { tick(); toggle(); };
     row.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
     box.appendChild(wrap);
   });
@@ -1386,9 +1405,18 @@ function loadHere(silent, fallback) {
 
 /* automatická obnova: návrat do aplikace (data starší 15 min) nebo obnovení připojení */
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && place && Date.now() - lastFetch > 15*60*1000) {
-    if (place.gps) loadHere(false, place);
-    else load(place.lat, place.lon, place.label);
+  if (document.hidden || !place) return;
+  const stale = Date.now() - lastFetch > 15*60*1000;
+  if (place.gps && navigator.geolocation) {
+    /* při každém návratu ověřit polohu — přesun o >1,5 km přenačte hned, i s čerstvými daty */
+    navigator.geolocation.getCurrentPosition(async p => {
+      const dKm = Math.hypot((p.coords.latitude - place.lat) * 111, (p.coords.longitude - place.lon) * 71);
+      if (dKm > 1.5) load(p.coords.latitude, p.coords.longitude, await gpsName(p.coords.latitude, p.coords.longitude), false, true);
+      else if (stale) load(place.lat, place.lon, place.label, false, true);
+    }, () => { if (stale) load(place.lat, place.lon, place.label, false, true); },
+    { timeout: 8000, maximumAge: 2*60*1000 });
+  } else if (stale) {
+    load(place.lat, place.lon, place.label);
   }
 });
 addEventListener('online', () => {
@@ -1414,6 +1442,7 @@ function bellState() {
   b.title = bellOn ? 'Upozornění na bouřky jsou zapnutá' : 'Zapnout upozornění na bouřky';
 }
 $('bellBtn').onclick = async () => {
+  tick();
   bellOn = !bellOn;
   stSet('wx-bell', bellOn);
   bellState();
@@ -1557,7 +1586,7 @@ function closeRadarFull() {
   clearTimeout(rfCloseTimer);
   rfCloseTimer = setTimeout(() => $('radarFull').classList.remove('show'), 320);
 }
-$('radarExpand').onclick = openRadarFull;
+$('radarExpand').onclick = () => { tick(); openRadarFull(); };
 $('rfClose').onclick = closeRadarFull;
 $('rfLocate').onclick = () => { if (radar.map && radar.place) radar.map.setView([radar.place.lat, radar.place.lon], 8); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('radarFull').classList.contains('show')) closeRadarFull(); });
@@ -1680,7 +1709,7 @@ async function initRadar(lat, lon) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.21';
+const APP_VERSION = '1.23';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {

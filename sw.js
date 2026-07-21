@@ -4,7 +4,7 @@
    - Nová verze čeká na potvrzení uživatele (aktualizační obrazovka v appce)
    - Data počasí neblokuje (ta si appka řeší sama, aby byla čerstvá) */
 
-const VERSION = '1.21';
+const VERSION = '1.23';
 const CACHE = 'pocasi-' + VERSION;
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
