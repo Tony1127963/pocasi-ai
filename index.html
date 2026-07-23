@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.34</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.35</span>
     </div>
   </div>
 </div>
@@ -988,13 +988,15 @@ async function load(lat, lon, label, silent, gps) {
     const base = `latitude=${lat}&longitude=${lon}&timezone=auto`;
     const modelIds = MODELS.map(m=>m.id).join(',');
 
-    const [mainRes, multiRes, metnoRes] = await Promise.allSettled([
+    const [mainRes, multiRes, dailyRes, metnoRes] = await Promise.allSettled([
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
         `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,precipitation,cloud_cover,is_day` +
         `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_gusts_10m,snowfall,cloud_cover` +
         `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_gusts_10m_max,snowfall_sum,uv_index_max&minutely_15=precipitation&forecast_days=7`).then(r=>r.json()),
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
         `&hourly=temperature_2m,weather_code,wind_gusts_10m,cloud_cover&models=${modelIds}&forecast_days=3`).then(r=>r.json()),
+      fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
+        `&daily=temperature_2m_max,temperature_2m_min,weather_code&models=${modelIds}&forecast_days=7`).then(r=>r.json()),
       fetch(`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`).then(r=>r.json())
     ]);
 
@@ -1002,15 +1004,16 @@ async function load(lat, lon, label, silent, gps) {
     const main = mainRes.value;
     const multi = multiRes.status === 'fulfilled' ? multiRes.value : null;
     const metno = metnoRes.status === 'fulfilled' ? metnoRes.value : null;
+    const md = dailyRes.status === 'fulfilled' ? dailyRes.value : null;
 
     lastFetch = Date.now();
-    stSet('wx-cache', { main, multi, metno, label, ts: lastFetch });
-    render(main, multi, metno, label, null);
+    stSet('wx-cache', { main, multi, metno, md, label, ts: lastFetch });
+    render(main, multi, metno, label, null, md);
   } catch(e) {
     /* offline režim: zkusit poslední uložená data */
     const cache = await stGet('wx-cache');
     if (cache && cache.main) {
-      render(cache.main, cache.multi, cache.metno, cache.label, cache.ts);
+      render(cache.main, cache.multi, cache.metno, cache.label, cache.ts, cache.md);
       return;
     }
     showError('Nepodařilo se načíst data z meteorologických serverů a v paměti zatím nejsou žádná uložená. Pokud aplikaci prohlížíte v náhledu Claude, sandbox blokuje připojení k externím API — otevřete soubor v prohlížeči (Chrome, Safari).');
@@ -1078,6 +1081,25 @@ function buildWcMap(multi) {
   return map;
 }
 
+
+/* ---------- konsenzus denní předpovědi (7 dní, medián + hlasování) ---------- */
+function buildDailyConsensus(main, md) {
+  const out = { max: {}, min: {}, wc: {} };
+  if (!md || !md.daily || !md.daily.time) return out;
+  const T = md.daily.time;
+  const grab = suffix => MODELS.map(m => md.daily[suffix + '_' + m.id]).filter(a => a && a.some(v => v != null));
+  const maxA = grab('temperature_2m_max'), minA = grab('temperature_2m_min'), wcA = grab('weather_code');
+  T.forEach((t, i) => {
+    const mx = maxA.map(a => a[i]).filter(v => v != null && isFinite(v));
+    const mn = minA.map(a => a[i]).filter(v => v != null && isFinite(v));
+    const wc = wcA.map(a => a[i]).filter(v => v != null && isFinite(v));
+    if (mx.length >= 2) out.max[t] = median(mx);
+    if (mn.length >= 2) out.min[t] = median(mn);
+    if (wc.length >= 2) out.wc[t] = wcVote(wc);
+  });
+  return out;
+}
+
 /* ---------- render ---------- */
 let tempAnimRaf = 0;
 function animateTemp(target) {
@@ -1095,7 +1117,7 @@ function animateTemp(target) {
   tempAnimRaf = requestAnimationFrame(step);
 }
 
-function render(main, multi, metno, label, staleTs) {
+function render(main, multi, metno, label, staleTs, md) {
   const cur = main.current;
   /* popisek ze stejné řady jako hodinovka — "aktuální" hodnota se s ní u zdroje rozchází
      a appka si pak protiřečila (nahoře zataženo, v hodinovce polojasno) */
@@ -1214,7 +1236,7 @@ function render(main, multi, metno, label, staleTs) {
   checkImminent(main, findNowIndex(main.hourly.time), label);
   renderAdvice(main, findNowIndex(main.hourly.time), gustCons);
   renderHourStrip(main, times, nowIdx, consensus, wcMap);
-  renderDaily(main, consensus, wcMap);
+  renderDaily(main, consensus, wcMap, buildDailyConsensus(main, md));
   renderFavs();
   updateStar();
 
@@ -1406,17 +1428,21 @@ function renderAdvice(main, nowIdx, gustCons) {
   });
 }
 
-function renderDaily(main, consensus, wcMap) {
+function renderDaily(main, consensus, wcMap, dc) {
   const d = main.daily, h = main.hourly;
   const box = $('dailyBox'); box.innerHTML = '';
-  const gMin = Math.min(...d.temperature_2m_min), gMax = Math.max(...d.temperature_2m_max);
+  /* denní hodnoty přes konsenzus modelů, s návratem k hlavnímu běhu */
+  const DMAX = d.time.map((t, i) => (dc && dc.max[t] != null) ? dc.max[t] : d.temperature_2m_max[i]);
+  const DMIN = d.time.map((t, i) => (dc && dc.min[t] != null) ? dc.min[t] : d.temperature_2m_min[i]);
+  const DWC  = d.time.map((t, i) => (dc && dc.wc[t]  != null) ? dc.wc[t]  : d.weather_code[i]);
+  const gMin = Math.min(...DMIN), gMax = Math.max(...DMAX);
   const span = Math.max(1, gMax - gMin);
 
   d.time.forEach((t, i) => {
     const date = new Date(t);
-    const [desc, em] = wmo(d.weather_code[i]);
-    const left = ((d.temperature_2m_min[i]-gMin)/span)*100;
-    const width = ((d.temperature_2m_max[i]-d.temperature_2m_min[i])/span)*100;
+    const [desc, em] = wmo(DWC[i]);
+    const left = ((DMIN[i]-gMin)/span)*100;
+    const width = ((DMAX[i]-DMIN[i])/span)*100;
 
     /* hodiny patřící tomuto dni */
     const dayStr = t.slice(0,10);
@@ -1426,7 +1452,7 @@ function renderDaily(main, consensus, wcMap) {
     /* kdy cca přijde to podstatné (bouřky > déšť/sníh) */
     const isStorm = c => c >= 95;
     const isPrec  = c => (c >= 51 && c <= 82) || (c >= 85);
-    const test = isStorm(d.weather_code[i]) ? isStorm : (isPrec(d.weather_code[i]) ? isPrec : null);
+    const test = isStorm(DWC[i]) ? isStorm : (isPrec(DWC[i]) ? isPrec : null);
     let whenTxt = '';
     if (test) {
       const hrs = idxs.filter(j => test(h.weather_code[j])).map(j => new Date(h.time[j]).getHours());
@@ -1440,7 +1466,7 @@ function renderDaily(main, consensus, wcMap) {
         <div class="d">${i===0 ? 'Dnes' : DAYS[date.getDay()]}<small>${date.getDate()}.${date.getMonth()+1}. · ${desc}${whenTxt}</small></div>
         <div title="${desc}" style="font-size:20px;text-align:center">${em}</div>
         <div class="range-track"><div class="range-fill" style="left:${left}%;width:${Math.max(width,4)}%"></div></div>
-        <div class="mm"><span>${Math.round(d.temperature_2m_min[i])}°</span> / ${Math.round(d.temperature_2m_max[i])}°</div>
+        <div class="mm"><span>${Math.round(DMIN[i])}°</span> / ${Math.round(DMAX[i])}°</div>
       </div>
       <div class="day-detail"><div class="dd-inner"></div></div>`;
 
@@ -1920,7 +1946,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.34';
+const APP_VERSION = '1.35';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
