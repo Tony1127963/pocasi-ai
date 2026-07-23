@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.30</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.31</span>
     </div>
   </div>
 </div>
@@ -1726,7 +1726,10 @@ async function initRadar(lat, lon) {
   radar.place = { lat, lon };
 
   /* snímky přestavět jen když jsou starší 5 min nebo se změnilo město — ne při každé tiché obnově */
-  if (samePlace && radar.frames.length && Date.now() - (radar.framesTs || 0) < 5*60*1000) return;
+  if (samePlace && radar.frames.length && Date.now() - (radar.framesTs || 0) < 5*60*1000) {
+    radarBannerUpdate(lat, lon, place ? place.label : '');   // kontrolu nad polohou dělat vždy
+    return;
+  }
 
   try {
     const d = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
@@ -1764,13 +1767,13 @@ async function initRadar(lat, lon) {
 /* ---------- radar v bodě: čte skutečné snímky (i predikční) nad vaší polohou ---------- */
 async function radarPointRain(lat, lon) {
   if (!radar.frames.length || !radar.host) return null;
-  const z = 8, S = 256, n = 2 ** z;
+  const z = 7, S = 256, n = 2 ** z;
   const xf = (lon + 180) / 360 * n;
   const la = lat * Math.PI / 180;
   const yf = (1 - Math.log(Math.tan(la) + 1 / Math.cos(la)) / Math.PI) / 2 * n;
   const tx = Math.floor(xf), ty = Math.floor(yf);
-  const px = Math.min(S - 3, Math.max(2, Math.floor((xf - tx) * S)));
-  const py = Math.min(S - 3, Math.max(2, Math.floor((yf - ty) * S)));
+  const px = Math.min(S - 4, Math.max(3, Math.floor((xf - tx) * S)));
+  const py = Math.min(S - 4, Math.max(3, Math.floor((yf - ty) * S)));
   const cv = document.createElement('canvas'); cv.width = cv.height = S;
   const cx = cv.getContext('2d', { willReadFrequently: true });
 
@@ -1781,10 +1784,10 @@ async function radarPointRain(lat, lon) {
       try {
         cx.clearRect(0, 0, S, S);
         cx.drawImage(img, 0, 0);
-        const d = cx.getImageData(px - 2, py - 2, 5, 5).data;   // okolí ~2 km
+        const d = cx.getImageData(px - 3, py - 3, 7, 7).data;   // okolí ~3 km
         let hits = 0;
-        for (let i = 3; i < d.length; i += 4) if (d[i] > 40) hits++;
-        res(hits >= 3);
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 22) hits++;   // i slabé srážky
+        res(hits >= 4);
       } catch(_) { res(null); }
     };
     img.onerror = () => res(null);
@@ -1795,7 +1798,7 @@ async function radarPointRain(lat, lon) {
     const idxs = [];
     for (let i = radar.pastCount - 1; i < radar.frames.length; i++) idxs.push(i);
     const res = await Promise.all(idxs.slice(0, 5).map(i => sample(radar.frames[i])));
-    if (res.every(v => v === null)) return null;               // dlaždice nešly přečíst
+    if (res.every(v => v === null)) return { unreadable: true };
     for (let k = 0; k < res.length; k++) {
       if (res[k]) {
         const f = radar.frames[idxs[k]];
@@ -1804,27 +1807,46 @@ async function radarPointRain(lat, lon) {
       }
     }
     return { none: true };
-  } catch(_) { return null; }
+  } catch(_) { return { unreadable: true }; }
 }
 
 /* pruh podle radaru — má přednost před modelem, protože měří skutečnost */
 async function radarBannerUpdate(lat, lon, label) {
-  const bar = $('imminentBar');
-  if (bar.classList.contains('show') && !bar.classList.contains('info')) return;  // výstraha má přednost
+  const bar = $('imminentBar'), note = $('radarNote');
   const r = await radarPointRain(lat, lon);
-  if (!r || r.none) return;
+  if (!r) return;
+
+  if (r.unreadable) { note.textContent = 'Kontrolu srážek nad vaší polohou se nepodařilo načíst.'; return; }
+
+  if (r.now) {
+    note.textContent = '📍 Nad vaší polohou: podle radaru právě prší.';
+    /* popisek počasí přepsat na déšť — modely tenhle déšť často nevidí */
+    const [dsc, emo] = wmo(61);
+    $('nowDesc').textContent = dsc;
+    $('nowEmoji').textContent = emo;
+    $('nowEmoji').className = 'emoji nowEmoji-float';
+    document.body.className = 'rain';
+    setFx('rain');
+  } else if (r.none) {
+    note.textContent = '📍 Nad vaší polohou: podle radaru beze srážek.';
+  } else {
+    note.textContent = `📍 Podle radaru dorazí srážky cca za ${r.mins} min.`;
+  }
+
+  if (bar.classList.contains('show') && !bar.classList.contains('info')) return;  // výstraha má přednost
   if (r.now) {
     bar.innerHTML = '🌧️ <b>Právě prší</b> — podle radaru máte srážky přímo nad sebou.';
-  } else {
+    bar.classList.add('show', 'info');
+  } else if (!r.none) {
     const when = r.mins <= 3 ? 'každou chvíli' : `cca za ${r.mins} min`;
     bar.innerHTML = `🌧️ <b>Déšť dorazí ${when}</b> — podle radaru. Deštník po ruce.`;
+    bar.classList.add('show', 'info');
     notifyEvent(`radar|${label}|${Math.round(Date.now() / 600000)}`, `🌧️ Déšť — ${label}`, `Dorazí ${when}.`, true);
   }
-  bar.classList.add('show', 'info');
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.30';
+const APP_VERSION = '1.31';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
