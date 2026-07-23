@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.29</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.30</span>
     </div>
   </div>
 </div>
@@ -990,7 +990,7 @@ async function load(lat, lon, label, silent, gps) {
 
     const [mainRes, multiRes, metnoRes] = await Promise.allSettled([
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
-        `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day` +
+        `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,precipitation,cloud_cover,is_day` +
         `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_gusts_10m,snowfall` +
         `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_gusts_10m_max,snowfall_sum,uv_index_max&minutely_15=precipitation&forecast_days=7`).then(r=>r.json()),
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
@@ -1036,12 +1036,27 @@ function animateTemp(target) {
 
 function render(main, multi, metno, label, staleTs) {
   const cur = main.current;
-  const [desc, emoji, mood] = wmo(cur.weather_code);
+  /* skutečnost má přednost před kódem modelu: prší-li, řekni déšť; jinak urči oblačnost z pokrytí oblohy */
+  let wcNow = cur.weather_code;
+  let rainNow = (cur.precipitation ?? 0) >= 0.05;
+  const m15r = main.minutely_15;
+  if (!rainNow && m15r && m15r.time && m15r.precipitation) {
+    const j = findNowIndex(m15r.time);
+    if ((m15r.precipitation[j] ?? 0) >= 0.05) rainNow = true;
+  }
+  if (rainNow && wcNow < 51) {
+    const mmNow = Math.max(cur.precipitation ?? 0, 0);
+    wcNow = mmNow >= 2.5 ? 65 : mmNow >= 0.5 ? 63 : 61;
+  } else if (!rainNow && wcNow <= 3 && cur.cloud_cover != null) {
+    const cc = cur.cloud_cover;
+    wcNow = cc < 12 ? 0 : cc < 40 ? 1 : cc < 70 ? 2 : 3;
+  }
+  const [desc, emoji, mood] = wmo(wcNow);
   document.body.className = mood;
 
   /* animované pozadí podle počasí a denní doby — vždy něco živého */
   const night = cur.is_day === 0;
-  const wc = cur.weather_code;
+  const wc = wcNow;
   setFx(mood === 'storm' ? 'storm'
       : (wc >= 51 && wc <= 57) ? 'drizzle'
       : mood === 'rain' ? 'rain'
@@ -1064,9 +1079,9 @@ function render(main, multi, metno, label, staleTs) {
 
   $('placeName').textContent = label;
   $('updated').textContent = 'Aktualizováno ' + new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'});
-  const heroEmoji = (night && cur.weather_code === 0) ? '🌙' : emoji;   // jasná noc = měsíc, ne rotující slunce
+  const heroEmoji = (night && wcNow === 0) ? '🌙' : emoji;   // jasná noc = měsíc, ne rotující slunce
   $('nowEmoji').textContent = heroEmoji;
-  $('nowEmoji').className = 'emoji ' + (cur.weather_code === 0 && !night ? 'nowEmoji-spin' : 'nowEmoji-float');
+  $('nowEmoji').className = 'emoji ' + (wcNow === 0 && !night ? 'nowEmoji-spin' : 'nowEmoji-float');
   $('nowDesc').textContent = desc;
   $('nowFeels').textContent = `Pocitově ${Math.round(cur.apparent_temperature)} °C`;
   $('stWind').textContent = fmt1(cur.wind_speed_10m) + ' km/h';
@@ -1809,7 +1824,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.29';
+const APP_VERSION = '1.30';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
