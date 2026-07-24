@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.38</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.39</span>
     </div>
   </div>
 </div>
@@ -990,7 +990,7 @@ async function load(lat, lon, label, silent, gps) {
     const [mainRes, multiRes, dailyRes, metnoRes] = await Promise.allSettled([
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
         `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,precipitation,cloud_cover,is_day` +
-        `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_gusts_10m,snowfall,cloud_cover` +
+        `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_gusts_10m,snowfall,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high` +
         `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_gusts_10m_max,snowfall_sum,uv_index_max&minutely_15=precipitation&forecast_days=7`).then(r=>r.json()),
       fetch(`https://api.open-meteo.com/v1/forecast?${base}` +
         `&hourly=temperature_2m,weather_code,wind_gusts_10m,cloud_cover&models=${modelIds}&forecast_days=3`).then(r=>r.json()),
@@ -1020,6 +1020,20 @@ async function load(lat, lon, label, silent, gps) {
 }
 
 
+
+
+/* vnímaná oblačnost: nízké patro plnou vahou, střední z 85 %, vysoké (tenké cirry) jen ze 35 % —
+   obloha s 95 % cirrů působí jako polojasno, ne jako zataženo */
+function perceivedCloud(main, i, fallback) {
+  const h = main.hourly;
+  const L = h.cloud_cover_low ? h.cloud_cover_low[i] : null;
+  const M = h.cloud_cover_mid ? h.cloud_cover_mid[i] : null;
+  const H = h.cloud_cover_high ? h.cloud_cover_high[i] : null;
+  if (L == null && M == null && H == null) return fallback;
+  const l = (L ?? 0) / 100, m = (M ?? 0) / 100, hi = (H ?? 0) / 100;
+  const eff = 1 - (1 - l) * (1 - 0.85 * m) * (1 - 0.35 * hi);
+  return Math.round(eff * 100);
+}
 
 /* ---------- oblačnost podle skutečného pokrytí oblohy (stupnice ČHMÚ) ---------- */
 const CLOUD_SCALE = [
@@ -1151,7 +1165,8 @@ function render(main, multi, metno, label, staleTs, md) {
   /* bez srážek/mlhy/bouřky rozhoduje skutečné pokrytí oblohy — jemnější škála než hrubé kódy */
   let ccNow = null;
   if (wcNow <= 3) {
-    ccNow = cloudAt(main, multi, metno, main.hourly.time[hourIdx], hourIdx);
+    const ccTotal = cloudAt(main, multi, metno, main.hourly.time[hourIdx], hourIdx);
+    ccNow = perceivedCloud(main, hourIdx, ccTotal);
     if (ccNow != null) [desc, emoji, mood] = cloudDesc(ccNow, cur.is_day === 0);
   }
   document.body.className = mood;
@@ -1270,7 +1285,9 @@ function renderHourStrip(main, times, nowIdx, consensus, wcMap) {
   for (let i = nowIdx; i < Math.min(nowIdx+24, h.time.length); i++) {
     const wcI = (wcMap && wcMap[h.time[i]] != null) ? wcMap[h.time[i]] : h.weather_code[i];
     let [ ,em ] = wmo(wcI);
-    if (wcI <= 3 && h.cloud_cover && h.cloud_cover[i] != null) em = cloudDesc(h.cloud_cover[i], false)[1];
+    if (wcI <= 3 && h.cloud_cover && h.cloud_cover[i] != null) {
+      em = cloudDesc(perceivedCloud(main, i, h.cloud_cover[i]), false)[1];
+    }
     const prob = h.precipitation_probability ? h.precipitation_probability[i] : null;
     const t = (consensus && consensus[i] != null) ? consensus[i] : h.temperature_2m[i];
     const mm = h.precipitation ? h.precipitation[i] : null;
@@ -1990,7 +2007,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.38';
+const APP_VERSION = '1.39';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
