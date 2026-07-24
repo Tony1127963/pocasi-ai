@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.37</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.38</span>
     </div>
   </div>
 </div>
@@ -1036,7 +1036,7 @@ function cloudDesc(pct, night) {
   return [row[1], em, row[3]];
 }
 /* konsenzus pokrytí oblohy přes modely (medián), jinak hlavní běh */
-function cloudAt(main, multi, timeStr, hourIdx) {
+function cloudAt(main, multi, metno, timeStr, hourIdx) {
   const vals = [];
   if (multi && multi.hourly && multi.hourly.time) {
     const i = multi.hourly.time.indexOf(timeStr);
@@ -1044,6 +1044,14 @@ function cloudAt(main, multi, timeStr, hourIdx) {
       const a = multi.hourly['cloud_cover_' + m.id];
       if (a && a[i] != null && isFinite(a[i])) vals.push(a[i]);
     });
+  }
+  /* Met Norway jako šestý, nezávislý hlas */
+  if (metno && metno.properties && metno.properties.timeseries) {
+    const key = timeStr.slice(0, 13);
+    const hit = metno.properties.timeseries.find(x => x.time.slice(0, 13) === key);
+    const cf = hit && hit.data && hit.data.instant && hit.data.instant.details
+      ? hit.data.instant.details.cloud_area_fraction : null;
+    if (cf != null && isFinite(cf)) vals.push(cf);
   }
   if (vals.length >= 2) return median(vals);
   const hc = main.hourly.cloud_cover;
@@ -1141,9 +1149,10 @@ function render(main, multi, metno, label, staleTs, md) {
   }
   let [desc, emoji, mood] = wmo(wcNow);
   /* bez srážek/mlhy/bouřky rozhoduje skutečné pokrytí oblohy — jemnější škála než hrubé kódy */
+  let ccNow = null;
   if (wcNow <= 3) {
-    const cc = cloudAt(main, multi, main.hourly.time[hourIdx], hourIdx);
-    if (cc != null) [desc, emoji, mood] = cloudDesc(cc, cur.is_day === 0);
+    ccNow = cloudAt(main, multi, metno, main.hourly.time[hourIdx], hourIdx);
+    if (ccNow != null) [desc, emoji, mood] = cloudDesc(ccNow, cur.is_day === 0);
   }
   document.body.className = mood;
 
@@ -1176,7 +1185,7 @@ function render(main, multi, metno, label, staleTs, md) {
   $('nowEmoji').textContent = heroEmoji;
   $('nowEmoji').className = 'emoji ' + (wcNow === 0 && !night ? 'nowEmoji-spin' : 'nowEmoji-float');
   $('nowDesc').textContent = desc;
-  $('nowFeels').textContent = `Pocitově ${Math.round(cur.apparent_temperature)} °C`;
+  $('nowFeels').textContent = `Pocitově ${Math.round(cur.apparent_temperature)} °C` + (ccNow != null ? ` · oblačnost ${Math.round(ccNow)} %` : '');
   $('stWind').textContent = fmt1(cur.wind_speed_10m) + ' km/h';
   $('stHum').textContent = cur.relative_humidity_2m + ' %';
   $('stPrec').textContent = fmt1(main.daily.precipitation_sum[0]) + ' mm';
@@ -1981,7 +1990,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.37';
+const APP_VERSION = '1.38';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
