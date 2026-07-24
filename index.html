@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.36</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.37</span>
     </div>
   </div>
 </div>
@@ -1876,6 +1876,7 @@ async function radarPointRain(lat, lon) {
   const cv = document.createElement('canvas'); cv.width = cv.height = S;
   const cx = cv.getContext('2d', { willReadFrequently: true });
 
+  /* jeden snímek -> {rain, level} nad bodem; level 0 nic, 1 slabý, 2 mírný, 3 silný */
   const sample = frame => new Promise(res => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -1883,10 +1884,19 @@ async function radarPointRain(lat, lon) {
       try {
         cx.clearRect(0, 0, S, S);
         cx.drawImage(img, 0, 0);
-        const d = cx.getImageData(px - 3, py - 3, 7, 7).data;   // okolí ~3 km
-        let hits = 0;
-        for (let i = 3; i < d.length; i += 4) if (d[i] > 22) hits++;   // i slabé srážky
-        res(hits >= 4);
+        const d = cx.getImageData(px - 3, py - 3, 7, 7).data;
+        let hits = 0, best = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] <= 22) continue;
+          hits++;
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          let lv = 1;                                   // modrá = slabé
+          if (r > 190 && g < 160) lv = 3;               // oranžová/červená = silné
+          else if (r > 170 && g > 170) lv = 3;          // žlutá = silné
+          else if (g > 150 && r < 170) lv = 2;          // zelená = mírné
+          if (lv > best) best = lv;
+        }
+        res({ rain: hits >= 4, level: hits >= 4 ? best : 0 });
       } catch(_) { res(null); }
     };
     img.onerror = () => res(null);
@@ -1894,18 +1904,40 @@ async function radarPointRain(lat, lon) {
   });
 
   try {
+    /* poslední změřený snímek + celý nowcast = časová osa nad vaší polohou */
     const idxs = [];
     for (let i = radar.pastCount - 1; i < radar.frames.length; i++) idxs.push(i);
-    const res = await Promise.all(idxs.slice(0, 5).map(i => sample(radar.frames[i])));
-    if (res.every(v => v === null)) return { unreadable: true };
-    for (let k = 0; k < res.length; k++) {
-      if (res[k]) {
-        const f = radar.frames[idxs[k]];
-        const mins = Math.round((f.time * 1000 - Date.now()) / 60000);
-        return { mins: Math.max(0, mins), now: k === 0 };
-      }
+    const out = await Promise.all(idxs.map(i => sample(radar.frames[i])));
+    if (out.every(v => v === null)) return { unreadable: true };
+
+    const T = idxs.map((fi, k) => ({
+      t: radar.frames[fi].time * 1000,
+      rain: out[k] ? out[k].rain : false,
+      level: out[k] ? out[k].level : 0
+    }));
+    const mins = ms => Math.round((ms - Date.now()) / 60000);
+    const now = T[0];
+    const res = { nowRain: now.rain, level: now.level, maxLevel: Math.max(...T.map(x => x.level)) };
+
+    if (now.rain) {
+      /* kdy ustane — první suchý snímek v nowcastu */
+      const stop = T.slice(1).find(x => !x.rain);
+      res.endMins = stop ? Math.max(0, mins(stop.t)) : null;   // null = drží po celý nowcast
+    } else {
+      const start = T.slice(1).find(x => x.rain);
+      if (start) {
+        res.startMins = Math.max(1, mins(start.t));
+        res.startAt = new Date(start.t);
+        res.level = start.level;
+        /* jak dlouho vydrží od příchodu */
+        const si = T.indexOf(start);
+        let last = si;
+        for (let k = si; k < T.length && T[k].rain; k++) last = k;
+        res.lastMins = last > si ? Math.round((T[last].t - start.t) / 60000) + 10 : 10;
+        res.openEnd = last === T.length - 1;
+      } else res.none = true;
     }
-    return { none: true };
+    return res;
   } catch(_) { return { unreadable: true }; }
 }
 
@@ -1914,38 +1946,42 @@ async function radarBannerUpdate(lat, lon, label) {
   const bar = $('imminentBar'), note = $('radarNote');
   const r = await radarPointRain(lat, lon);
   if (!r) return;
-
   if (r.unreadable) { note.textContent = 'Kontrolu srážek nad vaší polohou se nepodařilo načíst.'; return; }
 
-  if (r.now) {
-    note.textContent = '📍 Nad vaší polohou: podle radaru právě prší.';
-    /* popisek počasí přepsat na déšť — modely tenhle déšť často nevidí */
-    const [dsc, emo] = wmo(61);
+  const LV = ['', 'slabý', 'mírný', 'silný'];
+  const hhmm = d => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+
+  if (r.nowRain) {
+    const konec = r.endMins == null ? 'Podle radaru potrvá i v nejbližší půlhodině.'
+      : r.endMins <= 5 ? 'Podle radaru za chvíli ustane.'
+      : `Podle radaru ustane přibližně za ${r.endMins} min.`;
+    note.textContent = `📍 Nad vaší polohou: ${LV[r.level] || 'slabý'} déšť. ${konec}`;
+    const [dsc, emo] = wmo(r.level >= 3 ? 65 : r.level === 2 ? 63 : 61);
     $('nowDesc').textContent = dsc;
     $('nowEmoji').textContent = emo;
     $('nowEmoji').className = 'emoji nowEmoji-float';
     document.body.className = 'rain';
     setFx('rain');
-  } else if (r.none) {
-    note.textContent = '📍 Nad vaší polohou: podle radaru beze srážek.';
-  } else {
-    note.textContent = `📍 Podle radaru dorazí srážky cca za ${r.mins} min.`;
+    if (!(bar.classList.contains('show') && !bar.classList.contains('info'))) {
+      bar.innerHTML = `🌧️ <b>Právě prší</b> — ${LV[r.level] || 'slabý'} déšť. ${konec}`;
+      bar.classList.add('show', 'info');
+    }
+    return;
   }
 
-  if (bar.classList.contains('show') && !bar.classList.contains('info')) return;  // výstraha má přednost
-  if (r.now) {
-    bar.innerHTML = '🌧️ <b>Právě prší</b> — podle radaru máte srážky přímo nad sebou.';
-    bar.classList.add('show', 'info');
-  } else if (!r.none) {
-    const when = r.mins <= 3 ? 'každou chvíli' : `cca za ${r.mins} min`;
-    bar.innerHTML = `🌧️ <b>Déšť dorazí ${when}</b> — podle radaru. Deštník po ruce.`;
-    bar.classList.add('show', 'info');
-    notifyEvent(`radar|${label}|${Math.round(Date.now() / 600000)}`, `🌧️ Déšť — ${label}`, `Dorazí ${when}.`, true);
-  }
+  if (r.none) { note.textContent = '📍 Nad vaší polohou: podle radaru beze srážek.'; return; }
+
+  const trvani = r.openEnd ? `potrvá aspoň ${r.lastMins} min` : `potrvá zhruba ${r.lastMins} min`;
+  note.textContent = `📍 Srážky dorazí kolem ${hhmm(r.startAt)} (za ${r.startMins} min), ${LV[r.level] || 'slabý'} déšť, ${trvani}.`;
+  if (bar.classList.contains('show') && !bar.classList.contains('info')) return;
+  bar.innerHTML = `🌧️ <b>Déšť dorazí kolem ${hhmm(r.startAt)}</b> — za ${r.startMins} min, ${LV[r.level] || 'slabý'}, ${trvani}.`;
+  bar.classList.add('show', 'info');
+  notifyEvent(`radar|${label}|${hhmm(r.startAt)}`, `🌧️ Déšť — ${label}`,
+              `Dorazí kolem ${hhmm(r.startAt)} (za ${r.startMins} min), ${trvani}.`, true);
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.36';
+const APP_VERSION = '1.37';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
