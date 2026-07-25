@@ -53,7 +53,10 @@
 
   #fx { position:fixed; inset:0; z-index:0; pointer-events:none; }
   #fxOld { position:fixed; inset:0; z-index:1; pointer-events:none; opacity:0; transition:opacity .9s ease; }
-  .wrap { position:relative; z-index:1; max-width: 760px; margin: 0 auto; padding: 20px 16px 56px; }
+  .wrap {
+    position:relative; z-index:1; max-width: 760px; margin: 0 auto;
+    padding: calc(22px + env(safe-area-inset-top)) 16px calc(56px + env(safe-area-inset-bottom));
+  }
 
   .offline {
     display:none; margin-bottom:14px; padding:10px 14px; border-radius:14px;
@@ -558,7 +561,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.42</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.43</span>
     </div>
   </div>
 </div>
@@ -2045,7 +2048,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.42';
+const APP_VERSION = '1.43';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
