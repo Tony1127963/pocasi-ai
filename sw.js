@@ -4,7 +4,7 @@
    - Nová verze čeká na potvrzení uživatele (aktualizační obrazovka v appce)
    - Data počasí neblokuje (ta si appka řeší sama, aby byla čerstvá) */
 
-const VERSION = '1.41';
+const VERSION = '1.42';
 const CACHE = 'pocasi-' + VERSION;
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
@@ -55,7 +55,10 @@ self.addEventListener('fetch', e => {
           caches.open(CACHE).then(c => c.put(e.request, clone));
         }
         return res;
-      }).catch(() => cached);
+      }).catch(() =>
+        /* offline a bez uložené kopie: u otevření appky vrátit uloženou hlavní stránku */
+        cached || (e.request.mode === 'navigate' ? caches.match('./index.html') : Promise.reject())
+      );
       return cached || fromNet;
     })
   );

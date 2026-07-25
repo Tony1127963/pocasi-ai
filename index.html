@@ -2,7 +2,7 @@
 <html lang="cs">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Počasí AI · Fable 5</title>
 <meta name="theme-color" content="#16233f">
 <meta name="mobile-web-app-capable" content="yes">
@@ -13,9 +13,10 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root {
     --sky-top: #16233f;
@@ -39,6 +40,10 @@
     background: linear-gradient(180deg, var(--sky-top), var(--sky-bottom) 70%, #37517a);
     min-height: 100vh;
     transition: background 1.2s ease;
+    overflow-x: hidden;                          /* nic nesmí vytlačit stránku do strany */
+    overscroll-behavior-y: contain;              /* tažení dolů neobnoví appku omylem */
+    -webkit-tap-highlight-color: transparent;    /* bez šedého záblesku při doteku */
+    -webkit-text-size-adjust: 100%;
   }
   body.clear   { --sky-top:#1b3a6b; --sky-bottom:#3a6ea5; }
   body.cloudy  { --sky-top:#26313f; --sky-bottom:#46586c; }
@@ -131,7 +136,7 @@
   .search-box input {
     width:100%; padding:13px 16px; border-radius:14px;
     border:1px solid var(--card-line); background:var(--card);
-    color:var(--ink); font:500 15px 'Inter',sans-serif; outline:none;
+    color:var(--ink); font:500 16px 'Inter',sans-serif; outline:none;
     backdrop-filter: blur(10px);
   }
   .search-box input::placeholder { color:var(--ink-dim); }
@@ -190,7 +195,7 @@
   .legend i { display:inline-block; width:14px; height:4px; border-radius:2px; margin-right:6px; vertical-align:middle; }
 
   /* hourly strip */
-  .hours { display:flex; gap:6px; overflow-x:auto; padding-bottom:6px; -webkit-overflow-scrolling:touch; }
+  .hours { display:flex; gap:6px; overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:6px; -webkit-overflow-scrolling:touch; }
   .hour {
     min-width:64px; text-align:center; padding:10px 4px; border-radius:14px;
     background:rgba(255,255,255,.05); flex-shrink:0;
@@ -553,7 +558,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.41</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.42</span>
     </div>
   </div>
 </div>
@@ -1853,7 +1858,14 @@ $('radarPlay').onclick = () => {
 
 async function initRadar(lat, lon) {
   const note = $('radarNote');
-  if (typeof L === 'undefined') { note.textContent = 'Mapu radaru se nepodařilo načíst (blokované externí knihovny — v prohlížeči bude fungovat).'; return; }
+  /* mapová knihovna se načítá odloženě, aby neblokovala zobrazení appky — chvíli na ni počkat */
+  if (typeof L === 'undefined') {
+    for (let i = 0; i < 60 && typeof L === 'undefined'; i++) await new Promise(r => setTimeout(r, 100));
+    if (typeof L === 'undefined') {
+      note.textContent = 'Mapu radaru se nepodařilo načíst (blokované externí knihovny — v prohlížeči bude fungovat).';
+      return;
+    }
+  }
 
   const samePlace = radar.place && Math.abs(radar.place.lat - lat) < .001 && Math.abs(radar.place.lon - lon) < .001;
 
@@ -2033,7 +2045,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.41';
+const APP_VERSION = '1.42';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
