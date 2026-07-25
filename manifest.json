@@ -2,7 +2,7 @@
   "name": "Počasí AI · Fable 5",
   "short_name": "Počasí AI",
   "description": "Předpověď počasí z pěti nezávislých modelů, radar a výstrahy.",
-  "display": "fullscreen",
+  "display": "standalone",
   "start_url": ".",
   "background_color": "#16233f",
   "theme_color": "#16233f",
@@ -28,7 +28,6 @@
     }
   ],
   "display_override": [
-    "fullscreen",
     "standalone",
     "minimal-ui"
   ],
