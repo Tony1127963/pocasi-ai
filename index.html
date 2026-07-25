@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.39</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.40</span>
     </div>
   </div>
 </div>
@@ -1234,7 +1234,13 @@ function render(main, multi, metno, label, staleTs, md) {
   });
 
   /* hero teplota = konsenzus modelů pro aktuální hodinu (nejpravděpodobnější hodnota) */
-  const heroTemp = consensus[nowIdx] != null ? consensus[nowIdx] : cur.temperature_2m;
+  let heroTemp = consensus[nowIdx] != null ? consensus[nowIdx] : cur.temperature_2m;
+  /* konsenzus platí pro celou hodinu — posunout na aktuální minutu podle vývoje v hlavním běhu */
+  const hBase = main.hourly.temperature_2m ? main.hourly.temperature_2m[hourIdx] : null;
+  if (consensus[nowIdx] != null && hBase != null && cur.temperature_2m != null) {
+    const dT = cur.temperature_2m - hBase;
+    if (Math.abs(dT) <= 3) heroTemp += dT;
+  }
   animateTemp(Math.round(heroTemp));
 
   /* hlasování modelů o bouřkách + konsenzus nárazů větru */
@@ -1465,7 +1471,24 @@ function renderDaily(main, consensus, wcMap, dc) {
 
   d.time.forEach((t, i) => {
     const date = new Date(t);
-    const [desc, em] = wmo(DWC[i]);
+    /* stav dne z denních hodin: převládající počasí, ne "nejhorší okamžik dne" */
+    let desc, em;
+    {
+      const dayH = idxs.filter(j => { const hr = new Date(h.time[j]).getHours(); return hr >= 7 && hr <= 21; });
+      const base = dayH.length ? dayH : idxs;
+      const wcAt = j => (h.weather_code && h.weather_code[j] != null) ? h.weather_code[j] : 0;
+      const sum = base.reduce((a, j) => a + (h.precipitation ? (h.precipitation[j] ?? 0) : 0), 0);
+      const maxProb = Math.max(0, ...base.map(j => h.precipitation_probability ? (h.precipitation_probability[j] ?? 0) : 0));
+      if (base.some(j => wcAt(j) >= 95)) [desc, em] = wmo(95);
+      else if (sum >= 1 || maxProb >= 60) {
+        const codes = base.map(wcAt).filter(c => c >= 51).sort((a, b) => a - b);
+        [desc, em] = wmo(codes.length ? codes[Math.floor(codes.length / 2)] : 61);
+      } else {
+        const ccs = base.map(j => perceivedCloud(main, j, h.cloud_cover ? h.cloud_cover[j] : null)).filter(v => v != null);
+        if (ccs.length) { const cd = cloudDesc(median(ccs), false); desc = cd[0]; em = cd[1]; }
+        else [desc, em] = wmo(DWC[i]);
+      }
+    }
     const left = ((DMIN[i]-gMin)/span)*100;
     const width = ((DMAX[i]-DMIN[i])/span)*100;
 
@@ -1477,11 +1500,13 @@ function renderDaily(main, consensus, wcMap, dc) {
     /* kdy cca přijde to podstatné (bouřky > déšť/sníh) */
     const isStorm = c => c >= 95;
     const isPrec  = c => (c >= 51 && c <= 82) || (c >= 85);
-    const test = isStorm(DWC[i]) ? isStorm : (isPrec(DWC[i]) ? isPrec : null);
+    const anyStorm = idxs.some(j => (h.weather_code ? h.weather_code[j] : 0) >= 95);
+    const anyPrec = idxs.some(j => { const c = h.weather_code ? h.weather_code[j] : 0; return (c >= 51 && c <= 82) || c >= 85; });
+    const test = anyStorm ? isStorm : (anyPrec ? isPrec : null);
     let whenTxt = '';
     if (test) {
       const hrs = idxs.filter(j => test(h.weather_code[j])).map(j => new Date(h.time[j]).getHours());
-      if (hrs.length) whenTxt = ` · cca ${Math.min(...hrs)}–${Math.max(...hrs)+1} h`;
+      if (hrs.length) whenTxt = ` · ${anyStorm ? 'bouřky' : 'srážky'} cca ${Math.min(...hrs)}–${Math.max(...hrs)+1} h`;
     }
 
     const wrap = document.createElement('div');
@@ -2007,7 +2032,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.39';
+const APP_VERSION = '1.40';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
