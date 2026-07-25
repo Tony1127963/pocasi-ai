@@ -553,7 +553,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.40</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.41</span>
     </div>
   </div>
 </div>
@@ -1471,6 +1471,12 @@ function renderDaily(main, consensus, wcMap, dc) {
 
   d.time.forEach((t, i) => {
     const date = new Date(t);
+
+    /* hodiny patřící tomuto dni — musí být známé PŘED určením stavu dne */
+    const dayStr = t.slice(0,10);
+    const idxs = [];
+    h.time.forEach((ht, j) => { if (ht.slice(0,10) === dayStr) idxs.push(j); });
+
     /* stav dne z denních hodin: převládající počasí, ne "nejhorší okamžik dne" */
     let desc, em;
     {
@@ -1491,11 +1497,6 @@ function renderDaily(main, consensus, wcMap, dc) {
     }
     const left = ((DMIN[i]-gMin)/span)*100;
     const width = ((DMAX[i]-DMIN[i])/span)*100;
-
-    /* hodiny patřící tomuto dni */
-    const dayStr = t.slice(0,10);
-    const idxs = [];
-    h.time.forEach((ht, j) => { if (ht.slice(0,10) === dayStr) idxs.push(j); });
 
     /* kdy cca přijde to podstatné (bouřky > déšť/sníh) */
     const isStorm = c => c >= 95;
@@ -2032,7 +2033,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.40';
+const APP_VERSION = '1.41';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
