@@ -52,7 +52,6 @@
   body.storm   { --sky-top:#171626; --sky-bottom:#2f2c4a; }
 
   #fx { position:fixed; inset:0; z-index:0; pointer-events:none; }
-  #fxOld { position:fixed; inset:0; z-index:1; pointer-events:none; opacity:0; transition:opacity .9s ease; }
   .wrap { position:relative; z-index:1; max-width: 760px; margin: 0 auto; padding: 20px 16px 56px; }
 
   .offline {
@@ -484,11 +483,9 @@
   }
   .hour.now { background: rgba(245,182,79,.22); border-color: rgba(245,182,79,.55); }
   /* GPU vrstva pro plátna tapety */
-  #fx, #fxOld { will-change: transform; transform: translateZ(0); }
 </style>
 </head>
 <body>
-<canvas id="fxOld" aria-hidden="true"></canvas>
 <canvas id="fx" aria-hidden="true"></canvas>
 <div class="wrap">
 
@@ -558,7 +555,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.42</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.46</span>
     </div>
   </div>
 </div>
@@ -640,8 +637,6 @@ async function stSet(k, v) {
 /* ---------- animované pozadí (živá tapeta) ---------- */
 const fx = { c: $('fx'), ctx: null, mode: 'none', parts: [], aux: null, raf: 0, W: 0, H: 0, flash: 0, boltDraw: false, boltCount: 0, shoot: null, static: false, tiltX: 0, tiltY: 0 };
 fx.ctx = fx.c.getContext('2d');
-const fxOldCanvas = $('fxOld');
-const fxOldCtx = fxOldCanvas.getContext('2d');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const DPR = Math.min(devicePixelRatio || 1, 2);
 
@@ -657,13 +652,11 @@ if (window.DeviceOrientationEvent) {
 
 function fxResize() {
   fx.W = innerWidth; fx.H = innerHeight;
-  [fx.c, fxOldCanvas].forEach(c => {
+  [fx.c].forEach(c => {
     c.width = fx.W * DPR; c.height = fx.H * DPR;
     c.style.width = fx.W + 'px'; c.style.height = fx.H + 'px';
   });
   fx.ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  fxOldCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  fxOldCanvas.style.opacity = '0';                 // starý snímek po změně rozměrů nedává smysl
 }
 addEventListener('resize', fxResize); fxResize();
 
@@ -683,21 +676,14 @@ const mkStars = n => {
 
 function setFx(mode) {
   if (fx.mode === mode) return;
-  /* zamrazit poslední snímek staré scény a nechat ho plynule zmizet přes novou */
-  if (fx.mode !== 'none' && !fx.static && !document.hidden) {
-    fxOldCtx.clearRect(0, 0, fx.W, fx.H);
-    fxOldCtx.drawImage(fx.c, 0, 0, fx.W, fx.H);
-    fxOldCanvas.style.transition = 'none';
-    fxOldCanvas.style.opacity = '1';
-    requestAnimationFrame(() => {
-      fxOldCanvas.style.transition = 'opacity .9s ease';
-      fxOldCanvas.style.opacity = '0';
-    });
-    /* pojistka: kdyby snímkovací smyčka nedoběhla, starý obraz po vteřině zmizí natvrdo */
-    setTimeout(() => { fxOldCanvas.style.opacity = '0'; }, 1100);
-  } else {
-    fxOldCanvas.style.opacity = '0';
-    fxOldCtx.clearRect(0, 0, fx.W, fx.H);
+  /* přechod mezi scénami: jen krátké prolnutí jednoho plátna.
+     Kopírování snímku do druhého plátna se ukázalo jako zdroj "ducha" — grafika telefonu
+     si zamrzlý obraz občas ponechala přes celou obrazovku. */
+  if (fx.mode !== 'none' && !fx.static) {
+    fx.c.style.transition = 'opacity .45s ease';
+    fx.c.style.opacity = '.15';
+    clearTimeout(fx.fadeT);
+    fx.fadeT = setTimeout(() => { fx.c.style.opacity = '1'; }, 60);
   }
   fx.mode = mode; fx.parts = []; fx.aux = null; fx.shoot = null; fx.boltDraw = false; fx.flash = 0;
   cancelAnimationFrame(fx.raf);
@@ -873,7 +859,7 @@ function fxLoop() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) cancelAnimationFrame(fx.raf);
   else {
-    fxOldCanvas.style.opacity = '0';               // úklid případného zamrzlého snímku
+    fx.c.style.opacity = '1';                      // pojistka: tapeta musí být vždy vidět
     if (fx.mode !== 'none' && !fx.static) fxLoop();
   }
 });
@@ -2045,7 +2031,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.42';
+const APP_VERSION = '1.46';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
