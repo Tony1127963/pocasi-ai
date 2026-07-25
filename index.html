@@ -489,7 +489,6 @@
 <canvas id="fx" aria-hidden="true"></canvas>
 <div class="wrap">
 
-  <div class="imminent" id="imminentBar" role="alert"></div>
   <div class="offline" id="offlineBar">📡 <b>Offline</b> — zobrazuji poslední uložená data. <span id="offlineAge"></span></div>
 
   <div class="search-row">
@@ -520,6 +519,8 @@
         <div><b id="stPrec"></b><span>Srážky dnes</span></div>
       </div>
     </div>
+
+    <div class="imminent" id="imminentBar" role="alert"></div>
 
     <div class="alerts" id="alertsBox"></div>
 
@@ -555,7 +556,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.46</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.48</span>
     </div>
   </div>
 </div>
@@ -2031,7 +2032,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.46';
+const APP_VERSION = '1.48';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
@@ -2059,6 +2060,15 @@ $('updBtn').onclick = () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const draw = () => { fill.style.width = curP + '%'; pct.textContent = Math.round(curP) + ' %'; };
 
+  /* pauza mezi fázemi: ukazatel se zastaví, popis se přepne — jako u skutečné instalace,
+     kde mezi stahováním a instalací systém taky chvíli "přemýšlí" */
+  async function phase(label) {
+    await sleep(200 + R() * 240);        // doznění předchozí fáze (počítadlo zůstává vidět)
+    sub.textContent = '';
+    stat.textContent = label;
+    await sleep(480 + R() * 430);        // zřetelné pozastavení, než se ukazatel rozjede
+  }
+
   /* náhodná chůze k cíli: malé nepravidelné krůčky, občas mikropauza, občas delší zádrhel —
      pokaždé jiný průběh, jako skutečná instalace */
   async function walkTo(target, feel, onTick) {
@@ -2080,42 +2090,36 @@ $('updBtn').onclick = () => {
     const instEnd = 82 + R() * 5;
     const optEnd = 95 + R() * 2;
 
-    stat.textContent = 'Příprava aktualizace…';
-    await sleep(300 + R() * 300);
-    await walkTo(4 + R() * 3, { min: .5, max: 1.4, tickMin: 70, tickMax: 180 });
+    await phase('Příprava aktualizace…');
+    await walkTo(4 + R() * 3, { min: .9, max: 2.1, tickMin: 55, tickMax: 135 });
 
-    stat.textContent = 'Ověřování balíčku…';
-    await walkTo(verifyEnd, { min: .5, max: 1.2, tickMin: 80, tickMax: 200, stallChance: .06, stallMax: 500 });
-    await sleep(350 + R() * 350);
+    await phase('Ověřování balíčku…');
+    await walkTo(verifyEnd, { min: .8, max: 1.9, tickMin: 60, tickMax: 145, stallChance: .05, stallMax: 400 });
 
-    stat.textContent = 'Stahování aktualizace…';
+    await phase('Stahování aktualizace…');
     await walkTo(dlEnd, {
-      min: .8, max: 3, tickMin: 45, tickMax: 140, stallChance: .05, stallMax: 700
+      min: 1.3, max: 4.2, tickMin: 38, tickMax: 110, stallChance: .05, stallMax: 600
     }, () => {
       const done = sizeMB * Math.min(1, (curP - verifyEnd) / (dlEnd - verifyEnd));
       sub.textContent = `${done.toFixed(1).replace('.', ',')} MB / ${sizeMB.toFixed(1).replace('.', ',')} MB`;
     });
     sub.textContent = `${sizeMB.toFixed(1).replace('.', ',')} MB / ${sizeMB.toFixed(1).replace('.', ',')} MB`;
-    await sleep(250 + R() * 250);
 
-    stat.textContent = 'Instalace…';
-    sub.textContent = '';
-    await walkTo(instEnd, { min: .5, max: 2, tickMin: 60, tickMax: 180, stallChance: .06, stallMax: 1000 });
+    await phase('Instalace…');
+    await walkTo(instEnd, { min: .9, max: 2.8, tickMin: 50, tickMax: 135, stallChance: .05, stallMax: 800 });
 
-    stat.textContent = 'Optimalizace aplikace…';
+    await phase('Optimalizace aplikace…');
     await walkTo(optEnd, {
-      min: .4, max: 1.3, tickMin: 80, tickMax: 200, stallChance: .05, stallMax: 600
+      min: .7, max: 2, tickMin: 60, tickMax: 150, stallChance: .05, stallMax: 500
     }, () => {
       const n = Math.min(comps, 1 + Math.floor((curP - instEnd) / (optEnd - instEnd) * comps));
       sub.textContent = `Komponenta ${n} z ${comps}`;
     });
     sub.textContent = `Komponenta ${comps} z ${comps}`;
-    await sleep(300 + R() * 300);
 
-    stat.textContent = 'Dokončování…';
-    sub.textContent = '';
-    await walkTo(100, { min: .3, max: 1, tickMin: 90, tickMax: 220 });
-    await sleep(500 + R() * 500);
+    await phase('Dokončování…');
+    await walkTo(100, { min: .7, max: 1.7, tickMin: 65, tickMax: 165 });
+    await sleep(600 + R() * 500);
 
     stat.textContent = 'Restartování aplikace…';
     updWorker.postMessage('SKIP_WAITING');
