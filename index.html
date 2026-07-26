@@ -62,7 +62,7 @@
   .offline.show { display:block; }
 
   .imminent {
-    display:none; margin-bottom:14px; padding:13px 16px; border-radius:16px;
+    display:none; margin:18px 0 0; padding:13px 16px; border-radius:16px;   /* stejný rytmus jako karty */
     background:rgba(239,138,122,.2); border:1.5px solid rgba(239,138,122,.65);
     font-size:14px; line-height:1.45; backdrop-filter: blur(10px);
     animation: pulse 2.2s ease-in-out infinite;
@@ -269,6 +269,7 @@
 
   /* alerts */
   .alerts { margin-top:18px; display:flex; flex-direction:column; gap:10px; }
+  .alerts:empty { display:none; }                 /* bez výstrah nedělat mezeru */
   .alert {
     display:flex; gap:12px; align-items:flex-start; padding:13px 16px;
     border-radius:16px; border:1px solid; backdrop-filter: blur(10px);
@@ -556,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.54</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.55</span>
     </div>
   </div>
 </div>
@@ -2115,7 +2116,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.54';
+const APP_VERSION = '1.55';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
