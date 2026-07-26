@@ -556,7 +556,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.53</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.54</span>
     </div>
   </div>
 </div>
@@ -1304,6 +1304,7 @@ function renderHourStrip(main, times, nowIdx, consensus, wcMap) {
     const mm = h.precipitation ? h.precipitation[i] : null;
     const el = document.createElement('div');
     el.className = 'hour' + (i === nowIdx ? ' now' : '');
+    el.dataset.hour = h.time[i].slice(0, 13);     // aby radar mohl políčko dohledat
     el.innerHTML = `
       <div class="h">${i===nowIdx ? 'Teď' : new Date(h.time[i]).getHours()+':00'}</div>
       <div class="e">${em}</div>
@@ -2054,11 +2055,32 @@ async function radarPointRain(lat, lon) {
 }
 
 /* pruh podle radaru — má přednost před modelem, protože měří skutečnost */
+/* radar přepíše ikonu v hodinovém pásu — u nejbližších hodin je měření spolehlivější než model */
+function radarPaintHours(r) {
+  const strip = $('hourStrip');
+  if (!strip) return;
+  const setIco = (cell, code) => {
+    if (!cell) return;
+    const e = cell.querySelector('.e');
+    if (e) e.textContent = wmo(code)[1];
+    cell.title = wmo(code)[0] + ' (podle radaru)';
+  };
+  const key = d => new Date(d).toISOString().slice(0, 13);
+  if (r.nowRain) {
+    const code = r.level >= 3 ? 65 : r.level === 2 ? 63 : 61;
+    setIco(strip.querySelector('.hour.now'), code);
+  } else if (r.startAt && r.startMins != null && r.startMins <= 75) {
+    const code = r.level >= 3 ? 65 : r.level === 2 ? 63 : 61;
+    setIco(strip.querySelector(`.hour[data-hour="${key(r.startAt)}"]`), code);
+  }
+}
+
 async function radarBannerUpdate(lat, lon, label) {
   const bar = $('imminentBar'), note = $('radarNote');
   const r = await radarPointRain(lat, lon);
   if (!r) return;
   if (r.unreadable) { note.textContent = 'Kontrolu srážek nad vaší polohou se nepodařilo načíst.'; return; }
+  radarPaintHours(r);                     // sladit hodinový pás s tím, co radar skutečně vidí
 
   const LV = ['', 'slabý', 'mírný', 'silný'];
   const hhmm = d => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
@@ -2093,7 +2115,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.53';
+const APP_VERSION = '1.54';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
