@@ -556,7 +556,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.48</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.53</span>
     </div>
   </div>
 </div>
@@ -1150,8 +1150,19 @@ function render(main, multi, metno, label, staleTs, md) {
     if ((m15r.precipitation[j] ?? 0) >= 0.05) rainNow = true;
   }
   if (rainNow && wcNow < 51) {
-    const mmNow = Math.max(cur.precipitation ?? 0, 0);
-    wcNow = mmNow >= 2.5 ? 65 : mmNow >= 0.5 ? 63 : 61;
+    /* intenzitu brát z posledních 15 minut — hodinový součet popisuje i déšť, který už skončil.
+       Hranice podle meteorologie: do 2,5 mm/h slabý, do 8 mm/h mírný, nad 8 silný. */
+    let mm15 = null;
+    if (m15r && m15r.time && m15r.precipitation) {
+      const j = findNowIndex(m15r.time);
+      const v = m15r.precipitation[j];
+      if (v != null && isFinite(v)) mm15 = v;
+    }
+    if (mm15 != null) wcNow = mm15 >= 2 ? 65 : mm15 >= 0.6 ? 63 : 61;   // mm za 15 min
+    else {
+      const mmH = Math.max(cur.precipitation ?? 0, 0);                   // mm za hodinu
+      wcNow = mmH >= 8 ? 65 : mmH >= 2.5 ? 63 : 61;
+    }
   }
   let [desc, emoji, mood] = wmo(wcNow);
   /* bez srážek/mlhy/bouřky rozhoduje skutečné pokrytí oblohy — jemnější škála než hrubé kódy */
@@ -1190,7 +1201,9 @@ function render(main, multi, metno, label, staleTs, md) {
   $('updated').textContent = 'Aktualizováno ' + new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'});
   const heroEmoji = (night && wcNow === 0) ? '🌙' : emoji;   // jasná noc = měsíc, ne rotující slunce
   $('nowEmoji').textContent = heroEmoji;
-  $('nowEmoji').className = 'emoji ' + (wcNow === 0 && !night ? 'nowEmoji-spin' : 'nowEmoji-float');
+  /* rotuje jen čisté slunce — o animaci rozhoduje zobrazená ikona, ne kód modelu.
+     Kód totiž může tvrdit "jasno", zatímco podle oblačnosti kreslíme mrak, a ten se pak motal. */
+  $('nowEmoji').className = 'emoji ' + (heroEmoji === '☀️' ? 'nowEmoji-spin' : 'nowEmoji-float');
   $('nowDesc').textContent = desc;
   $('nowFeels').textContent = `Pocitově ${Math.round(cur.apparent_temperature)} °C` + (ccNow != null ? ` · oblačnost ${Math.round(ccNow)} %` : '');
   $('stWind').textContent = fmt1(cur.wind_speed_10m) + ' km/h';
@@ -1407,8 +1420,9 @@ function renderAdvice(main, nowIdx, gustCons) {
   const end = Math.min(nowIdx + 12, h.time.length);       // nejbližších 12 h
   const items = [];
 
-  const feels = h.apparent_temperature.slice(nowIdx, end).filter(v => v != null);
-  const fMin = Math.min(...feels), fMax = Math.max(...feels);
+  const feels = (h.apparent_temperature || h.temperature_2m || []).slice(nowIdx, end).filter(v => v != null);
+  const fMin = feels.length ? Math.min(...feels) : 0;
+  const fMax = feels.length ? Math.max(...feels) : 0;
   const ref = fMax;                                        // oblečení podle nejtepleji pocitové části dne
 
   if (ref >= 26) items.push(['🩳', 'Horko — lehké letní oblečení, kraťasy a tričko bohatě stačí.']);
@@ -1420,19 +1434,29 @@ function renderAdvice(main, nowIdx, gustCons) {
 
   if (fMax - fMin >= 9) items.push(['🌡️', `Velké výkyvy (pocitově ${Math.round(fMin)}–${Math.round(fMax)} °C) — oblečte se ve vrstvách.`]);
 
+  const snow = (h.snowfall || []).slice(nowIdx, end).reduce((a, b) => a + (b || 0), 0);
+  /* při sněžení a mrazu nemá smysl radit deštník — srážky spadnou jako sníh */
+  const tWin = (h.temperature_2m || []).slice(nowIdx, end).filter(v => v != null);
+  const snowy = snow >= 0.2 || (tWin.length > 0 && Math.max(...tWin) <= 1);
+
   const probs = h.precipitation_probability ? h.precipitation_probability.slice(nowIdx, end) : [];
   const pMax = Math.max(0, ...probs.filter(v => v != null));
-  if (pMax >= 60) {
-    const firstIdx = probs.findIndex(p => p >= 60);
-    const when = firstIdx >= 0 ? ` (nejspíš kolem ${new Date(h.time[nowIdx + firstIdx]).getHours()}:00)` : '';
-    items.push(['☂️', `Deštník s sebou — pravděpodobnost srážek až ${pMax} %${when}.`]);
+  if (!snowy) {
+    if (pMax >= 60) {
+      const firstIdx = probs.findIndex(p => p >= 60);
+      const when = firstIdx >= 0 ? ` (nejspíš kolem ${new Date(h.time[nowIdx + firstIdx]).getHours()}:00)` : '';
+      items.push(['☂️', `Deštník s sebou — pravděpodobnost srážek až ${pMax} %${when}.`]);
+    } else if (pMax >= 35) {
+      const fi = probs.findIndex(p => p >= 35);
+      const w = fi >= 0 ? ` kolem ${new Date(h.time[nowIdx + fi]).getHours()}:00` : '';
+      items.push(['🌂', `Může sprchnout${w} (${pMax} %) — skládací deštník do batohu neuškodí.`]);
+    }
   } else if (pMax >= 35) {
     const fi = probs.findIndex(p => p >= 35);
     const w = fi >= 0 ? ` kolem ${new Date(h.time[nowIdx + fi]).getHours()}:00` : '';
-    items.push(['🌂', `Může sprchnout${w} (${pMax} %) — skládací deštník do batohu neuškodí.`]);
+    items.push(['🌨️', `Sněhové srážky${w} (${pMax} %) — počítejte s bílou nadílkou.`]);
   }
 
-  const snow = h.snowfall.slice(nowIdx, end).reduce((a, b) => a + (b || 0), 0);
   if (snow >= 1) items.push(['🥾', 'Bude sněžit — nepromokavé boty s dobrou podrážkou.']);
 
   const gustAt = i => (gustCons && gustCons[i] != null) ? gustCons[i] : h.wind_gusts_10m[i];
@@ -1468,13 +1492,17 @@ function renderDaily(main, consensus, wcMap, dc) {
     const dayStr = t.slice(0,10);
     const idxs = [];
     h.time.forEach((ht, j) => { if (ht.slice(0,10) === dayStr) idxs.push(j); });
+    /* stav hodiny podle hlasování modelů — týž zdroj, jaký kreslí rozbalené hodiny,
+       aby popisek dne nemlčel o dešti, který je v detailu vidět */
+    const wcH = j => (wcMap && wcMap[h.time[j]] != null) ? wcMap[h.time[j]]
+                   : ((h.weather_code && h.weather_code[j] != null) ? h.weather_code[j] : 0);
 
     /* stav dne z denních hodin: převládající počasí, ne "nejhorší okamžik dne" */
     let desc, em;
     {
       const dayH = idxs.filter(j => { const hr = new Date(h.time[j]).getHours(); return hr >= 7 && hr <= 21; });
       const base = dayH.length ? dayH : idxs;
-      const wcAt = j => (h.weather_code && h.weather_code[j] != null) ? h.weather_code[j] : 0;
+      const wcAt = wcH;
       const sum = base.reduce((a, j) => a + (h.precipitation ? (h.precipitation[j] ?? 0) : 0), 0);
       const maxProb = Math.max(0, ...base.map(j => h.precipitation_probability ? (h.precipitation_probability[j] ?? 0) : 0));
       if (base.some(j => wcAt(j) >= 95)) [desc, em] = wmo(95);
@@ -1493,13 +1521,19 @@ function renderDaily(main, consensus, wcMap, dc) {
     /* kdy cca přijde to podstatné (bouřky > déšť/sníh) */
     const isStorm = c => c >= 95;
     const isPrec  = c => (c >= 51 && c <= 82) || (c >= 85);
-    const anyStorm = idxs.some(j => (h.weather_code ? h.weather_code[j] : 0) >= 95);
-    const anyPrec = idxs.some(j => { const c = h.weather_code ? h.weather_code[j] : 0; return (c >= 51 && c <= 82) || c >= 85; });
+    const anyStorm = idxs.some(j => wcH(j) >= 95);
+    const anyPrec = idxs.some(j => { const c = wcH(j); return (c >= 51 && c <= 82) || c >= 85; });
     const test = anyStorm ? isStorm : (anyPrec ? isPrec : null);
     let whenTxt = '';
     if (test) {
-      const hrs = idxs.filter(j => test(h.weather_code[j])).map(j => new Date(h.time[j]).getHours());
-      if (hrs.length) whenTxt = ` · ${anyStorm ? 'bouřky' : 'srážky'} cca ${Math.min(...hrs)}–${Math.max(...hrs)+1} h`;
+      const hrs = idxs.filter(j => test(wcH(j))).map(j => new Date(h.time[j]).getHours());
+      if (hrs.length) {
+        const snowHrs = idxs.filter(j => { const c = wcH(j); return (c >= 71 && c <= 77) || c === 85 || c === 86; }).length;
+        const precHrs = idxs.filter(j => { const c = wcH(j); return c >= 51; }).length;
+        const kind = anyStorm ? 'bouřky' : (snowHrs > precHrs / 2 ? 'sněžení' : 'srážky');
+        const from = Math.min(...hrs), to = Math.max(...hrs) + 1;
+        whenTxt = (to - from >= 20) ? ` · ${kind} téměř celý den` : ` · ${kind} cca ${from}–${to} h`;
+      }
     }
 
     const wrap = document.createElement('div');
@@ -1661,6 +1695,21 @@ async function notifyEvent(key, title, body, gentle) {
 function checkImminent(main, nowIdx, label) {
   const bar = $('imminentBar');
   const h = main.hourly;
+  /* sněží, nebo prší? podle typu srážek se mění i slova a ikona */
+  const isSnowAt = i => {
+    const sf = h.snowfall ? (h.snowfall[i] ?? 0) : 0;
+    const c = h.weather_code ? (h.weather_code[i] ?? 0) : 0;
+    const t = h.temperature_2m ? h.temperature_2m[i] : 5;
+    return sf > 0 || (c >= 71 && c <= 77) || c === 85 || c === 86 || t <= 0.5;
+  };
+  /* padá něco právě teď? (pro rozlišení "právě" vs "se blíží") */
+  const happeningNow = (() => {
+    const cp = (main.current && main.current.precipitation != null) ? main.current.precipitation : 0;
+    let m = 0;
+    const q = main.minutely_15;
+    if (q && q.time && q.precipitation) { const j = findNowIndex(q.time); m = q.precipitation[j] ?? 0; }
+    return cp >= 0.05 || m >= 0.05;
+  })();
   let found = null;
   for (let i = nowIdx; i < Math.min(nowIdx + 4, h.time.length); i++) {
     const c = h.weather_code[i];
@@ -1675,13 +1724,16 @@ function checkImminent(main, nowIdx, label) {
     const m15 = main.minutely_15;
     bar.classList.remove('show', 'info');
 
-    const showRain = (mins, txt, key, extra) => {
+    const showRain = (mins, txt, key, extra, snow) => {
       const when = mins <= 10 ? 'prakticky teď'
         : mins < 90 ? `cca za ${mins} min`
         : `kolem ${new Date(Date.now() + mins*60000).getHours()}:00 (za ${Math.round(mins/60)} h)`;
-      bar.innerHTML = `🌧️ <b>${txt}</b> — ${when}.${extra || ''} Deštník po ruce.`;
+      const ico = snow ? '❄️' : '🌧️';
+      const word = snow ? txt.replace('Přeháňka', 'Sněhová přeháňka').replace('Déšť', 'Sněžení') : txt;
+      const tip = snow ? 'Pozor na klouzavý povrch.' : 'Deštník po ruce.';
+      bar.innerHTML = `${ico} <b>${word}</b> — ${when}.${extra || ''} ${tip}`;
       bar.classList.add('show', 'info');
-      notifyEvent(key, `🌧️ ${txt} — ${label}`, `Dorazí ${when}.`, true);
+      notifyEvent(key, `${ico} ${word} — ${label}`, `Dorazí ${when}.`, true);
     };
 
     /* právě prší? */
@@ -1689,7 +1741,9 @@ function checkImminent(main, nowIdx, label) {
       const nowI = findNowIndex(m15.time);
       const cur15 = m15.precipitation[nowI] ?? 0;
       if (cur15 >= 0.05) {
-        bar.innerHTML = `🌧️ <b>Právě prší</b> — ${fmt1(cur15)} mm za 15 min (radarová data).`;
+        bar.innerHTML = isSnowAt(nowIdx)
+          ? `❄️ <b>Právě sněží</b> — ${fmt1(cur15)} mm srážek za 15 min (radarová data).`
+          : `🌧️ <b>Právě prší</b> — ${fmt1(cur15)} mm za 15 min (radarová data).`;
         bar.classList.add('show', 'info');
         return;
       }
@@ -1697,7 +1751,7 @@ function checkImminent(main, nowIdx, label) {
       for (let i = nowI + 1; i <= Math.min(nowI + 8, m15.time.length - 1); i++) {
         if ((m15.precipitation[i] ?? 0) >= 0.05) {
           const mins = Math.max(5, Math.round((new Date(m15.time[i]) - Date.now()) / 60000));
-          if (mins <= 120) { showRain(mins, 'Přeháňka se blíží', `shower|${label}|${m15.time[i].slice(0,13)}`); return; }
+          if (mins <= 120) { showRain(mins, 'Přeháňka se blíží', `shower|${label}|${m15.time[i].slice(0,13)}`, '', isSnowAt(nowIdx)); return; }
           break;
         }
       }
@@ -1711,7 +1765,7 @@ function checkImminent(main, nowIdx, label) {
       if (mm >= 0.2 || pr >= 55) {
         const mins = Math.max(5, Math.round((new Date(hh.time[i]) - Date.now()) / 60000));
         const extra = pr ? ` Pravděpodobnost ${pr} %.` : '';
-        showRain(mins, 'Déšť se blíží', `rainH|${label}|${hh.time[i].slice(0,13)}`, extra);
+        showRain(mins, 'Déšť se blíží', `rainH|${label}|${hh.time[i].slice(0,13)}`, extra, isSnowAt(i));
         return;
       }
     }
@@ -1720,7 +1774,11 @@ function checkImminent(main, nowIdx, label) {
   bar.classList.remove('info');
   const when = found.mins <= 10 ? 'prakticky teď' : `cca za ${found.mins < 90 ? found.mins + ' min' : Math.round(found.mins/60) + ' h'}`;
   const mmTxt = found.mm != null && found.mm >= 0.5 ? ` Čeká se kolem ${fmt1(found.mm)} mm/h.` : '';
-  bar.innerHTML = `${found.ico} <b>${found.what} se blíží</b> — ${when}.${mmTxt} Zkontrolujte, co máte venku, a raději neplánujte cesty.`;
+  /* když už jev probíhá, nehlásit ho jako blížící se */
+  const nowish = found.mins <= 20 || (happeningNow && found.mins <= 45);
+  bar.innerHTML = nowish
+    ? `${found.ico} <b>${found.what} právě teď</b> — zasahuje vaši oblast.${mmTxt} Zkontrolujte, co máte venku, a raději neplánujte cesty.`
+    : `${found.ico} <b>${found.what} se blíží</b> — ${when}.${mmTxt} Zkontrolujte, co máte venku, a raději neplánujte cesty.`;
   bar.classList.add('show');
   notifyEvent(found.key, `${found.ico} ${found.what} — ${label}`, `Dorazí ${when}.${mmTxt}`);
 }
@@ -1935,19 +1993,22 @@ async function radarPointRain(lat, lon) {
       try {
         cx.clearRect(0, 0, S, S);
         cx.drawImage(img, 0, 0);
-        const d = cx.getImageData(px - 3, py - 3, 7, 7).data;
-        let hits = 0, best = 0;
+        const d = cx.getImageData(px - 2, py - 2, 5, 5).data;   // okolí ~2 km
+        const lvls = [];
         for (let i = 0; i < d.length; i += 4) {
           if (d[i + 3] <= 22) continue;
-          hits++;
-          const r = d[i], g = d[i + 1], b = d[i + 2];
+          const r = d[i], g = d[i + 1];
           let lv = 1;                                   // modrá = slabé
-          if (r > 190 && g < 160) lv = 3;               // oranžová/červená = silné
-          else if (r > 170 && g > 170) lv = 3;          // žlutá = silné
-          else if (g > 150 && r < 170) lv = 2;          // zelená = mírné
-          if (lv > best) best = lv;
+          if (r > 200 && g < 145) lv = 3;               // oranžová/červená = silné
+          else if (r > 185 && g > 165) lv = 2;          // žlutá = mírné
+          else if (g > 145 && r < 185) lv = 2;          // zelená = mírné
+          lvls.push(lv);
         }
-        res({ rain: hits >= 4, level: hits >= 4 ? best : 0 });
+        /* rozhoduje převládající (prostřední) intenzita, ne nejsilnější bod —
+           jinak jádro o dva kilometry vedle udělalo z tří kapek "silný déšť" */
+        lvls.sort((a, b) => a - b);
+        const level = lvls.length >= 4 ? lvls[Math.floor(lvls.length / 2)] : 0;
+        res({ rain: lvls.length >= 4, level });
       } catch(_) { res(null); }
     };
     img.onerror = () => res(null);
@@ -2032,7 +2093,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.48';
+const APP_VERSION = '1.53';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
