@@ -557,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.56</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.57</span>
     </div>
   </div>
 </div>
@@ -1190,8 +1190,8 @@ function render(main, multi, metno, label, staleTs, md) {
       : (code === 1 || code === 2) ? (night ? 'partlynight' : 'partlyday')
       : night ? 'stars' : 'sun';
 
-  /* měřené srážky? pak popisku věříme i bez radaru */
-  const rainMeasured = rainNow;
+  /* opravdu naměřený déšť? 15minutová data jsou model — samotné 0,1 mm radaru přebít nesmí */
+  const rainMeasured = (cur.precipitation ?? 0) >= 0.3;
   /* jinak si připravíme "suchou" podobu podle oblačnosti — radar ji použije,
      když nad vaší polohou žádné srážky nevidí (model je jen předpokládal) */
   dryLook = null;
@@ -1745,7 +1745,7 @@ function checkImminent(main, nowIdx, label) {
     if ((c === 75 || c === 86) && !found) found = { ico:'❄️', what:'Silné sněžení', mins, mm, key:`snow|${label}|${h.time[i]}` };
   }
   if (!found) {
-    /* nic vážného — nejdřív 15min radarová data (přesnost na minuty), pak hodinová (dosah 8 h) */
+    /* nic vážného — nejdřív 15min data (přesnost na minuty), pak hodinová (dosah 8 h) */
     const m15 = main.minutely_15;
     bar.classList.remove('show', 'info');
 
@@ -1767,8 +1767,8 @@ function checkImminent(main, nowIdx, label) {
       const cur15 = m15.precipitation[nowI] ?? 0;
       if (cur15 >= 0.05) {
         bar.innerHTML = isSnowAt(nowIdx)
-          ? `❄️ <b>Právě sněží</b> — ${fmt1(cur15)} mm srážek za 15 min (radarová data).`
-          : `🌧️ <b>Právě prší</b> — ${fmt1(cur15)} mm za 15 min (radarová data).`;
+          ? `❄️ <b>Právě sněží</b> — ${fmt1(cur15)} mm srážek za 15 min (odhad z modelu).`
+          : `🌧️ <b>Právě prší</b> — ${fmt1(cur15)} mm za 15 min (odhad z modelu).`;
         bar.classList.add('show', 'info');
         return;
       }
@@ -2136,6 +2136,13 @@ async function radarBannerUpdate(lat, lon, label) {
       $('nowEmoji').className = 'emoji ' + (dryLook.emoji === '☀️' ? 'nowEmoji-spin' : 'nowEmoji-float');
       document.body.className = dryLook.body;
       setFx(dryLook.scene);
+      /* stáhnout i modrý pruh, pokud tvrdí, že právě prší */
+      if (bar.classList.contains('info') && /Právě (prší|sněží)/.test(bar.textContent)) {
+        bar.classList.remove('show', 'info');
+      }
+      /* a srovnat políčko "Teď" v hodinovém pásu */
+      const nowCell = $('hourStrip') && $('hourStrip').querySelector('.hour.now .e');
+      if (nowCell) nowCell.textContent = dryLook.emoji;
       note.textContent += ' Popisek proto neukazuje srážky.';
       dryLook = null;
     }
@@ -2152,7 +2159,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.56';
+const APP_VERSION = '1.57';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
