@@ -557,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.57</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.59</span>
     </div>
   </div>
 </div>
@@ -1116,6 +1116,7 @@ function buildDailyConsensus(main, md) {
 
 /* ---------- render ---------- */
 let dryLook = null;      // suchá podoba pro případ, že radar nad polohou nic nevidí
+let dryApplied = false;  // už jsme popisek podle radaru srovnali? (kvůli vysvětlení v poznámce)
 let tempAnimRaf = 0;
 function animateTemp(target) {
   const el = $('nowTemp');
@@ -1194,8 +1195,11 @@ function render(main, multi, metno, label, staleTs, md) {
   const rainMeasured = (cur.precipitation ?? 0) >= 0.3;
   /* jinak si připravíme "suchou" podobu podle oblačnosti — radar ji použije,
      když nad vaší polohou žádné srážky nevidí (model je jen předpokládal) */
-  dryLook = null;
-  if (wcNow >= 51 && wcNow <= 67 && !rainMeasured && ccPerc != null) {
+  dryLook = null; dryApplied = false;
+  /* platí pro všechny dešťové srážky — mrholení, déšť i přeháňky (kódy 51–67 a 80–82).
+     Sníh a bouřky se záměrně nikdy neruší. */
+  const rainKind = mood === 'rain';
+  if (rainKind && !rainMeasured && ccPerc != null) {
     const cd = cloudDesc(ccPerc, night);
     dryLook = { desc: cd[0], emoji: cd[1], body: cd[2] === 'clear' ? (night ? 'night' : 'clear') : 'cloudy',
                 scene: sceneFor(ccPerc < 12 ? 0 : ccPerc < 50 ? 2 : 3, cd[2]) };
@@ -1304,6 +1308,7 @@ function render(main, multi, metno, label, staleTs, md) {
   requestAnimationFrame(() => $('app').classList.remove('switching'));
 
   /* radar až po zobrazení appky — Leaflet potřebuje znát rozměry mapy */
+  radarCheckNow(place.lat, place.lon);                       // radar promluví hned
   requestAnimationFrame(() => initRadar(place.lat, place.lon));
 }
 
@@ -1926,6 +1931,28 @@ $('radarPlay').onclick = () => {
   tl.addEventListener('pointercancel', () => scrubbing = false);
 })();
 
+/* Seznam radarových snímků a kontrola nad vaší polohou — záměrně NEZÁVISLÉ na mapové
+   knihovně. Čtení pixelů ji nepotřebuje, a kdyby se knihovna nenačetla (pomalá síť,
+   blokovaná adresa), oprava popisku podle radaru musí fungovat dál. */
+async function radarFramesEnsure() {
+  if (radar.frames.length && Date.now() - (radar.framesTs || 0) < 5*60*1000) return true;
+  try {
+    const d = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
+    const past = d.radar.past;
+    radar.frames = [...past, ...(d.radar.nowcast || [])];
+    radar.pastCount = past.length;
+    radar.host = d.host;
+    radar.framesTs = Date.now();
+    radar.layersStale = true;              // mapové vrstvy je potřeba postavit znovu
+    return true;
+  } catch(_) { return false; }
+}
+
+/* kontrola nad polohou hned, bez čekání na mapu */
+async function radarCheckNow(lat, lon) {
+  if (await radarFramesEnsure()) radarBannerUpdate(lat, lon, place ? place.label : '');
+}
+
 async function initRadar(lat, lon) {
   const note = $('radarNote');
   /* mapová knihovna se načítá odloženě, aby neblokovala zobrazení appky — chvíli na ni počkat */
@@ -1959,23 +1986,22 @@ async function initRadar(lat, lon) {
   radar.place = { lat, lon };
 
   /* snímky přestavět jen když jsou starší 5 min nebo se změnilo město — ne při každé tiché obnově */
-  if (samePlace && radar.frames.length && Date.now() - (radar.framesTs || 0) < 5*60*1000) {
+  if (samePlace && radar.layers.length && !radar.layersStale && Date.now() - (radar.framesTs || 0) < 5*60*1000) {
     radarBannerUpdate(lat, lon, place ? place.label : '');   // kontrolu nad polohou dělat vždy
     return;
   }
 
   try {
-    const d = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
-    const past = d.radar.past;                        // celé 2 h historie (13 snímků po 10 min)
-    const frames = [...past, ...(d.radar.nowcast || [])];
+    if (!(await radarFramesEnsure())) throw new Error('bez snímků');
+    const frames = radar.frames;
     radar.layers.forEach(l => l.remove());
-    radar.layers = []; radar.frames = frames; radar.pastCount = past.length; radar.host = d.host;
-    radar.framesTs = Date.now();
+    radar.layers = [];
+    radar.layersStale = false;
     $('radarTl').innerHTML = '';
     frames.forEach(f => {
       /* maxNativeZoom 7: nad tímto přiblížením se dlaždice jen zvětší — konec šedých cedulí
          a řádově méně stahování, takže animace je svižná */
-      const tl = L.tileLayer(`${d.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
+      const tl = L.tileLayer(`${radar.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
         { opacity: 0, maxNativeZoom: 7, maxZoom: 12, keepBuffer: 4, updateWhenIdle: true, updateWhenZooming: false });
       /* plynulé prolínání snímků místo tvrdého střihu */
       tl.on('add', () => { const c = tl.getContainer(); if (c) c.style.transition = 'opacity .72s linear'; });
@@ -2143,9 +2169,10 @@ async function radarBannerUpdate(lat, lon, label) {
       /* a srovnat políčko "Teď" v hodinovém pásu */
       const nowCell = $('hourStrip') && $('hourStrip').querySelector('.hour.now .e');
       if (nowCell) nowCell.textContent = dryLook.emoji;
-      note.textContent += ' Popisek proto neukazuje srážky.';
+      dryApplied = true;
       dryLook = null;
     }
+    if (dryApplied) note.textContent += ' Popisek proto neukazuje srážky.';
     return;
   }
 
@@ -2159,7 +2186,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.57';
+const APP_VERSION = '1.59';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
