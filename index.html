@@ -557,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.55</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.56</span>
     </div>
   </div>
 </div>
@@ -1115,6 +1115,7 @@ function buildDailyConsensus(main, md) {
 }
 
 /* ---------- render ---------- */
+let dryLook = null;      // suchá podoba pro případ, že radar nad polohou nic nevidí
 let tempAnimRaf = 0;
 function animateTemp(target) {
   const el = $('nowTemp');
@@ -1167,10 +1168,11 @@ function render(main, multi, metno, label, staleTs, md) {
   }
   let [desc, emoji, mood] = wmo(wcNow);
   /* bez srážek/mlhy/bouřky rozhoduje skutečné pokrytí oblohy — jemnější škála než hrubé kódy */
+  const ccPerc = perceivedCloud(main, hourIdx,
+                  cloudAt(main, multi, metno, main.hourly.time[hourIdx], hourIdx));
   let ccNow = null;
   if (wcNow <= 3) {
-    const ccTotal = cloudAt(main, multi, metno, main.hourly.time[hourIdx], hourIdx);
-    ccNow = perceivedCloud(main, hourIdx, ccTotal);
+    ccNow = ccPerc;
     if (ccNow != null) [desc, emoji, mood] = cloudDesc(ccNow, cur.is_day === 0);
   }
   document.body.className = mood;
@@ -1178,6 +1180,27 @@ function render(main, multi, metno, label, staleTs, md) {
   /* animované pozadí podle počasí a denní doby — vždy něco živého */
   const night = cur.is_day === 0;
   const wc = wcNow;
+  const sceneFor = (code, mood2) =>
+        mood2 === 'storm' ? 'storm'
+      : (code >= 51 && code <= 57) ? 'drizzle'
+      : mood2 === 'rain' ? 'rain'
+      : mood2 === 'snow' ? 'snow'
+      : (code === 45 || code === 48) ? 'fog'
+      : code === 3 ? 'clouds'
+      : (code === 1 || code === 2) ? (night ? 'partlynight' : 'partlyday')
+      : night ? 'stars' : 'sun';
+
+  /* měřené srážky? pak popisku věříme i bez radaru */
+  const rainMeasured = rainNow;
+  /* jinak si připravíme "suchou" podobu podle oblačnosti — radar ji použije,
+     když nad vaší polohou žádné srážky nevidí (model je jen předpokládal) */
+  dryLook = null;
+  if (wcNow >= 51 && wcNow <= 67 && !rainMeasured && ccPerc != null) {
+    const cd = cloudDesc(ccPerc, night);
+    dryLook = { desc: cd[0], emoji: cd[1], body: cd[2] === 'clear' ? (night ? 'night' : 'clear') : 'cloudy',
+                scene: sceneFor(ccPerc < 12 ? 0 : ccPerc < 50 ? 2 : 3, cd[2]) };
+  }
+
   setFx(mood === 'storm' ? 'storm'
       : (wc >= 51 && wc <= 57) ? 'drizzle'
       : mood === 'rain' ? 'rain'
@@ -2104,7 +2127,20 @@ async function radarBannerUpdate(lat, lon, label) {
     return;
   }
 
-  if (r.none) { note.textContent = '📍 Nad vaší polohou: podle radaru beze srážek.'; return; }
+  if (r.none) {
+    note.textContent = '📍 Nad vaší polohou: podle radaru beze srážek.';
+    /* model srážky předpokládal, ale radar nad vámi nic neměří — popisek i tapetu srovnat */
+    if (dryLook) {
+      $('nowDesc').textContent = dryLook.desc;
+      $('nowEmoji').textContent = dryLook.emoji;
+      $('nowEmoji').className = 'emoji ' + (dryLook.emoji === '☀️' ? 'nowEmoji-spin' : 'nowEmoji-float');
+      document.body.className = dryLook.body;
+      setFx(dryLook.scene);
+      note.textContent += ' Popisek proto neukazuje srážky.';
+      dryLook = null;
+    }
+    return;
+  }
 
   const trvani = r.openEnd ? `potrvá aspoň ${r.lastMins} min` : `potrvá zhruba ${r.lastMins} min`;
   note.textContent = `📍 Srážky dorazí kolem ${hhmm(r.startAt)} (za ${r.startMins} min), ${LV[r.level] || 'slabý'} déšť, ${trvani}.`;
@@ -2116,7 +2152,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.55';
+const APP_VERSION = '1.56';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
