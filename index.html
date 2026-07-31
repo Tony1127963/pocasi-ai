@@ -557,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.60</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.61</span>
     </div>
   </div>
 </div>
@@ -2035,7 +2035,7 @@ async function initRadar(lat, lon) {
 /* ---------- radar v bodě: čte skutečné snímky (i predikční) nad vaší polohou ---------- */
 async function radarPointRain(lat, lon) {
   if (!radar.frames.length || !radar.host) return null;
-  const z = 7, S = 256, n = 2 ** z;
+  const z = 8, S = 256, n = 2 ** z;      // 1 pixel ≈ 400 m (na přiblížení 7 to bylo 800 m)
   const xf = (lon + 180) / 360 * n;
   const la = lat * Math.PI / 180;
   const yf = (1 - Math.log(Math.tan(la) + 1 / Math.cos(la)) / Math.PI) / 2 * n;
@@ -2053,22 +2053,30 @@ async function radarPointRain(lat, lon) {
       try {
         cx.clearRect(0, 0, S, S);
         cx.drawImage(img, 0, 0);
-        const d = cx.getImageData(px - 2, py - 2, 5, 5).data;   // okolí ~2 km
-        const lvls = [];
-        for (let i = 0; i < d.length; i += 4) {
-          if (d[i + 3] <= 22) continue;
+        /* čte se čtverec 5×5 pixelů = 2 × 2 km kolem vaší polohy */
+        const d = cx.getImageData(px - 2, py - 2, 5, 5).data;
+        const lvlAt = i => {
+          if (d[i + 3] <= 22) return 0;
           const r = d[i], g = d[i + 1];
-          let lv = 1;                                   // modrá = slabé
-          if (r > 200 && g < 145) lv = 3;               // oranžová/červená = silné
-          else if (r > 185 && g > 165) lv = 2;          // žlutá = mírné
-          else if (g > 145 && r < 185) lv = 2;          // zelená = mírné
-          lvls.push(lv);
+          if (r > 200 && g < 145) return 3;             // oranžová/červená = silné
+          if (r > 185 && g > 165) return 2;             // žlutá = mírné
+          if (g > 145 && r < 185) return 2;             // zelená = mírné
+          return 1;                                     // modrá = slabé
+        };
+        const inner = [], all = [];
+        for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
+          const lv = lvlAt((y * 5 + x) * 4);
+          if (lv) {
+            all.push(lv);
+            if (Math.abs(x - 2) <= 1 && Math.abs(y - 2) <= 1) inner.push(lv);   // 3×3 = 1,2 km
+          }
         }
-        /* rozhoduje převládající (prostřední) intenzita, ne nejsilnější bod —
-           jinak jádro o dva kilometry vedle udělalo z tří kapek "silný déšť" */
-        lvls.sort((a, b) => a - b);
-        const level = lvls.length >= 4 ? lvls[Math.floor(lvls.length / 2)] : 0;
-        res({ rain: lvls.length >= 4, level });
+        const centre = lvlAt((2 * 5 + 2) * 4);
+        /* "prší nad vámi" jen když je mokrý přímo váš pixel, nebo většina těsného okolí —
+           dřív stačily 4 mokré pixely ze čtverce 4 × 4 km, takže hlásila i buňka 3 km daleko */
+        const overhead = centre > 0 || inner.length >= 5;
+        const pool = (inner.length ? inner : all).slice().sort((a, b) => a - b);
+        res({ rain: overhead, level: overhead ? pool[Math.floor(pool.length / 2)] : 0 });
       } catch(_) { res(null); }
     };
     img.onerror = () => res(null);
@@ -2197,7 +2205,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.60';
+const APP_VERSION = '1.61';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
