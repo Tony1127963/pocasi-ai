@@ -557,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.61</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.62</span>
     </div>
   </div>
 </div>
@@ -2142,6 +2142,110 @@ function radarPaintHours(r) {
   }
 }
 
+
+/* ---------- pohyb srážek: kam se sune to, co je na radaru ----------
+   Radarová předpověď (nowcast) sahá jen ~30 min. Tohle čte dva starší snímky,
+   spočítá z nich rychlost a směr posunu a promítne, jestli srážky doputují k vám. */
+async function radarWindow(frame, z, gx, gy, R) {
+  const S = 256;
+  const x0 = gx - R, y0 = gy - R, W = 2 * R + 1;
+  const tx0 = Math.floor(x0 / S), tx1 = Math.floor((x0 + W - 1) / S);
+  const ty0 = Math.floor(y0 / S), ty1 = Math.floor((y0 + W - 1) / S);
+  const cw = (tx1 - tx0 + 1) * S, ch = (ty1 - ty0 + 1) * S;
+  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  const loads = [];
+  for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
+    loads.push(new Promise(res => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { try { cx.drawImage(img, (tx - tx0) * S, (ty - ty0) * S); } catch(_) {} res(true); };
+      img.onerror = () => res(false);
+      img.src = `${radar.host}${frame.path}/${S}/${z}/${tx}/${ty}/2/1_1.png`;
+    }));
+  }
+  const ok = await Promise.all(loads);
+  if (!ok.some(Boolean)) return null;
+  try {
+    return cx.getImageData(x0 - tx0 * S, y0 - ty0 * S, W, W).data;
+  } catch(_) { return null; }
+}
+
+async function radarMotion(lat, lon) {
+  if (!radar.frames.length || !radar.host || radar.pastCount < 3) return null;
+  /* širší záběr: co je teď 30 km daleko, bylo před půl hodinou 50 km daleko —
+     na užším okně by pás v tom starším snímku vůbec nebyl vidět */
+  const z = 6, R = 50;                       // 1 px ≈ 1,6 km → okno ~160 km
+  const n = 2 ** z;
+  const la = lat * Math.PI / 180;
+  const gx = Math.round((lon + 180) / 360 * n * 256);
+  const gy = Math.round((1 - Math.log(Math.tan(la) + 1 / Math.cos(la)) / Math.PI) / 2 * n * 256);
+
+  const iNow = radar.pastCount - 1;
+  const iOld = Math.max(0, iNow - 3);        // ~30 min zpět
+  if (iOld === iNow) return null;
+  const [aOld, aNow] = await Promise.all([
+    radarWindow(radar.frames[iOld], z, gx, gy, R),
+    radarWindow(radar.frames[iNow], z, gx, gy, R)
+  ]);
+  if (!aOld || !aNow) return null;
+
+  const W = 2 * R + 1;
+  const wet = (arr, i) => arr[i * 4 + 3] > 22;
+
+  /* Posun se hledá porovnáním obou snímků: zkusíme různá posunutí a vybereme to,
+     při kterém se srážkové plochy nejlépe kryjí. Odolnější než počítat těžiště —
+     to se zkreslí, jakmile pás vyjíždí z okraje okna. */
+  const oldPts = [];
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    if (wet(aOld, y * W + x)) oldPts.push([x, y]);
+  }
+  let nowCount = 0;
+  for (let i = 0; i < W * W; i++) if (wet(aNow, i)) nowCount++;
+  if (oldPts.length < 40 || nowCount < 40) return null;
+
+  const MAXS = 26;                      // až ~42 km posunu (≈85 km/h za 30 min)
+  let bx = 0, by = 0, bestScore = -1;
+  for (let dy = -MAXS; dy <= MAXS; dy++) for (let dx = -MAXS; dx <= MAXS; dx++) {
+    let hit = 0, seen = 0;
+    for (let p = 0; p < oldPts.length; p += 2) {          // každý druhý bod stačí
+      const x = oldPts[p][0] + dx, y = oldPts[p][1] + dy;
+      if (x < 0 || y < 0 || x >= W || y >= W) continue;
+      seen++;
+      if (wet(aNow, y * W + x)) hit++;
+    }
+    if (seen < 20) continue;
+    const score = hit / seen * Math.min(1, seen / (oldPts.length / 2));   // penalizace za útěk z okna
+    if (score > bestScore) { bestScore = score; bx = dx; by = dy; }
+  }
+  if (bestScore < 0.45) return null;    // shoda příliš slabá, odhadu nevěřit
+
+  const dtMin = (radar.frames[iNow].time - radar.frames[iOld].time) / 60;
+  if (dtMin <= 0) return null;
+  const vx = bx / dtMin, vy = by / dtMin;   // px za minutu
+  const speed = Math.hypot(vx, vy);
+  const kmPerPx = 156.54303 * Math.cos(la) / (2 ** z);      // šířka pixelu v km
+  const kmh = speed * kmPerPx * 60;
+  if (kmh < 8 || kmh > 160) return null;      // nedůvěryhodný odhad
+
+  /* kdy některá srážková oblast doputuje nad vás */
+  let best = null;
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    if (!wet(aNow, y * W + x)) continue;
+    const dx = R - x, dy = R - y;                       // vektor k vaší poloze
+    const t = (dx * vx + dy * vy) / (speed * speed);    // čas nejtěsnějšího přiblížení
+    if (t <= 2 || t > 150) continue;
+    const missX = dx - vx * t, missY = dy - vy * t;
+    if (Math.hypot(missX, missY) * kmPerPx > 5) continue;   // mine dál než 5 km
+    if (best == null || t < best) best = t;
+  }
+  if (best == null) return null;
+
+  const DIRS = ['severu','severovýchodu','východu','jihovýchodu','jihu','jihozápadu','západu','severozápadu'];
+  const ang = (Math.atan2(-vx, vy) * 180 / Math.PI + 360) % 360;   // odkud přichází
+  return { mins: Math.round(best), from: DIRS[Math.round(ang / 45) % 8], kmh: Math.round(kmh) };
+}
+
 async function radarBannerUpdate(lat, lon, label) {
   const bar = $('imminentBar'), note = $('radarNote');
   const r = await radarPointRain(lat, lon);
@@ -2172,6 +2276,18 @@ async function radarBannerUpdate(lat, lon, label) {
 
   if (r.none) {
     note.textContent = '📍 Nad vaší polohou: podle radaru beze srážek.';
+    /* radarová předpověď sahá ~30 min; dál se ptáme, kam se srážky v okolí sunou */
+    radarMotion(lat, lon).then(mv => {
+      if (!mv) return;
+      const when = mv.mins < 90 ? `cca za ${mv.mins} min`
+                 : `kolem ${new Date(Date.now() + mv.mins*60000).getHours()}:00`;
+      note.textContent = `📍 Srážky od ${mv.from} (${mv.kmh} km/h) by měly dorazit ${when}.`;
+      if (bar.classList.contains('show') && !bar.classList.contains('info')) return;
+      bar.innerHTML = `🌧️ <b>Déšť se blíží od ${mv.from}</b> — ${when} podle pohybu na radaru. Deštník po ruce.`;
+      bar.classList.add('show', 'info');
+      notifyEvent(`move|${label}|${Math.round(Date.now()/9e5)}`, `🌧️ Déšť — ${label}`,
+                  `Podle radaru dorazí ${when} (od ${mv.from}).`, true);
+    });
     /* model srážky předpokládal, ale radar nad vámi nic neměří — popisek i tapetu srovnat */
     if (dryLook) {
       $('nowDesc').textContent = dryLook.desc;
@@ -2205,7 +2321,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.61';
+const APP_VERSION = '1.62';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
@@ -2345,7 +2461,11 @@ setInterval(() => {
     showLoading();
     loadHere(false, last);                 // čerstvá GPS poloha, záloha = poslední známá
   } else if (last && last.lat != null) load(last.lat, last.lon, last.label);
-  else load(50.0755, 14.4378, 'Praha, CZ');
+  else {
+    /* první spuštění: zkusit rovnou polohu, Praha je jen záloha, když ji nepovolíte */
+    showLoading();
+    loadHere(false, { lat: 50.0755, lon: 14.4378, label: 'Praha, CZ' });
+  }
 })();
 </script>
 </body>
