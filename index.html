@@ -557,7 +557,7 @@
     <div class="sources">
       Teplota = konsenzus 5 nezávislých modelů: ECMWF · GFS (NOAA) · ICON (DWD) · ARPEGE · Met Norway<br>
       Data přes Open-Meteo a api.met.no<br>
-      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.62</span>
+      <span style="opacity:.85">✨ Vytvořeno s AI Claude Fable 5 od Anthropic · verze 1.63</span>
     </div>
   </div>
 </div>
@@ -1304,7 +1304,7 @@ function render(main, multi, metno, label, staleTs, md) {
   };
 
   renderAlerts(main, findNowIndex(main.hourly.time), mx);
-  checkImminent(main, findNowIndex(main.hourly.time), label);
+  checkImminent(main, findNowIndex(main.hourly.time), label, wcMap);
   renderAdvice(main, findNowIndex(main.hourly.time), gustCons);
   renderHourStrip(main, times, nowIdx, consensus, wcMap);
   renderDaily(main, consensus, wcMap, buildDailyConsensus(main, md));
@@ -1731,7 +1731,7 @@ async function notifyEvent(key, title, body, gentle) {
 }
 
 /* nejbližší 3 h: bouřka nebo silný déšť/sníh na obzoru */
-function checkImminent(main, nowIdx, label) {
+function checkImminent(main, nowIdx, label, wcMap) {
   const bar = $('imminentBar');
   const h = main.hourly;
   /* sněží, nebo prší? podle typu srážek se mění i slova a ikona */
@@ -1751,7 +1751,9 @@ function checkImminent(main, nowIdx, label) {
   })();
   let found = null;
   for (let i = nowIdx; i < Math.min(nowIdx + 4, h.time.length); i++) {
-    const c = h.weather_code[i];
+    /* rozhoduje odhlasovaný stav — jeden model, který jako jediný vidí bouřku,
+       patří do karty "Možné bouřky", ne do naléhavého červeného pruhu */
+    const c = (wcMap && wcMap[h.time[i]] != null) ? wcMap[h.time[i]] : h.weather_code[i];
     const mins = Math.max(0, Math.round((new Date(h.time[i]) - Date.now()) / 60000));
     const mm = h.precipitation ? h.precipitation[i] : null;
     if (c >= 95) { found = { ico:'⛈️', what:'Bouřka', mins, mm, key:`storm|${label}|${h.time[i]}` }; break; }
@@ -2218,7 +2220,7 @@ async function radarMotion(lat, lon) {
     const score = hit / seen * Math.min(1, seen / (oldPts.length / 2));   // penalizace za útěk z okna
     if (score > bestScore) { bestScore = score; bx = dx; by = dy; }
   }
-  if (bestScore < 0.45) return null;    // shoda příliš slabá, odhadu nevěřit
+  if (bestScore < 0.55) return null;    // shoda příliš slabá, odhadu nevěřit
 
   const dtMin = (radar.frames[iNow].time - radar.frames[iOld].time) / 60;
   if (dtMin <= 0) return null;
@@ -2229,15 +2231,24 @@ async function radarMotion(lat, lon) {
   if (kmh < 8 || kmh > 160) return null;      // nedůvěryhodný odhad
 
   /* kdy některá srážková oblast doputuje nad vás */
-  let best = null;
+  const cands = [];
   for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
     if (!wet(aNow, y * W + x)) continue;
     const dx = R - x, dy = R - y;                       // vektor k vaší poloze
     const t = (dx * vx + dy * vy) / (speed * speed);    // čas nejtěsnějšího přiblížení
-    if (t <= 2 || t > 150) continue;
+    if (t <= 10 || t > 150) continue;                   // pod 10 min si už poradí kontrola nad polohou
     const missX = dx - vx * t, missY = dy - vy * t;
     if (Math.hypot(missX, missY) * kmPerPx > 5) continue;   // mine dál než 5 km
-    if (best == null || t < best) best = t;
+    cands.push(t);
+  }
+  if (cands.length < 8) return null;                    // pár osamocených bodů nestačí
+  cands.sort((a, b) => a - b);
+  /* hlásit až souvislou oblast: aspoň 8 bodů dorazí do čtvrthodiny po sobě */
+  let best = null;
+  for (let i = 0; i < cands.length; i++) {
+    let k = 0;
+    for (let j = i; j < cands.length && cands[j] <= cands[i] + 15; j++) k++;
+    if (k >= 8) { best = cands[i]; break; }
   }
   if (best == null) return null;
 
@@ -2321,7 +2332,7 @@ async function radarBannerUpdate(lat, lon, label) {
 }
 
 /* ---------- service worker + aktualizační systém ---------- */
-const APP_VERSION = '1.62';
+const APP_VERSION = '1.63';
 let updReg = null, updWorker = null, updInstalling = false;
 
 function offerUpdate(worker) {
